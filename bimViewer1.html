@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BIM Section Box Viewer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-dark: #1a1d23;
+    --bg-panel: #22262e;
+    --bg-panel-hover: #2a2f38;
+    --border: #333840;
+    --text-primary: #e8eaed;
+    --text-secondary: #9aa0a8;
+    --accent: #4fc3f7;
+    --accent-dim: rgba(79, 195, 247, 0.15);
+    --accent-glow: rgba(79, 195, 247, 0.3);
+    --x-color: #e57373;
+    --y-color: #81c784;
+    --z-color: #4fc3f7;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #canvas-container { width: 100%; height: 100%; position: relative; }
+  canvas { display: block; }
+
+  .toolbar {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 2px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 4px; z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .toolbar button {
+    background: transparent; border: none; color: var(--text-secondary);
+    padding: 8px 14px; border-radius: 7px; cursor: pointer;
+    font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.15s ease; white-space: nowrap;
+  }
+
+  .toolbar button:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+  .toolbar button.active { background: var(--accent-dim); color: var(--accent); }
+  .toolbar button svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .toolbar .separator { width: 1px; background: var(--border); margin: 4px; }
+
+  .info-panel {
+    position: absolute; bottom: 16px; left: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px; z-index: 100;
+    font-size: 12px; color: var(--text-secondary); line-height: 1.7;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); max-width: 320px;
+  }
+
+  .info-panel .title { color: var(--text-primary); font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+
+  .info-panel kbd {
+    background: var(--bg-dark); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent);
+  }
+
+  .section-panel {
+    position: absolute; top: 70px; right: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; z-index: 100; width: 260px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); display: none;
+  }
+
+  .section-panel.visible { display: block; }
+
+  .section-panel .panel-title {
+    font-weight: 600; font-size: 13px; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+
+  .section-panel .panel-title svg { width: 16px; height: 16px; color: var(--accent); }
+
+  .axis-group { margin-bottom: 10px; }
+
+  .axis-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 6px;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  .axis-label .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .axis-label.x-axis .dot { background: var(--x-color); }
+  .axis-label.y-axis .dot { background: var(--y-color); }
+  .axis-label.z-axis .dot { background: var(--z-color); }
+
+  .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+
+  .slider-row span {
+    font-size: 11px; color: var(--text-secondary); width: 30px; flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .slider-row span:first-child { text-align: right; }
+
+  input[type="range"] {
+    flex: 1; -webkit-appearance: none; height: 4px;
+    background: var(--bg-dark); border-radius: 2px; outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+    border: 2px solid var(--bg-panel); box-shadow: 0 0 6px var(--accent-glow);
+  }
+
+  .section-panel .reset-btn {
+    width: 100%; margin-top: 8px; padding: 8px;
+    background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-secondary); font-family: 'DM Sans', sans-serif;
+    font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s ease;
+  }
+
+  .section-panel .reset-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .pivot-indicator {
+    position: absolute; bottom: 16px; right: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; z-index: 100;
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    color: var(--text-secondary); box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .pivot-indicator .label {
+    font-family: 'DM Sans', sans-serif; font-weight: 600; font-size: 11px;
+    color: var(--text-primary); margin-bottom: 4px;
+  }
+
+  #axes-container {
+    position: absolute; bottom: 80px; right: 16px;
+    width: 100px; height: 100px; z-index: 100; pointer-events: none;
+  }
+
+  .loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg-dark); z-index: 1000; transition: opacity 0.5s ease;
+  }
+
+  .loading.hidden { opacity: 0; pointer-events: none; }
+
+  .loading-text { font-size: 14px; color: var(--text-secondary); animation: pulse 1.5s ease-in-out infinite; }
+
+  @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+  <div class="loading" id="loading"><div class="loading-text">Initializing BIM Viewer...</div></div>
+
+  <div class="toolbar">
+    <button id="btn-orbit" class="active" title="Orbit Mode">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3c4 4 4 14 0 18"/><path d="M3 12h18"/></svg>
+      Orbit
+    </button>
+    <button id="btn-set-pivot" title="Set Pivot Mode — click a surface to set orbit center">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="10" stroke-dasharray="2 3"/></svg>
+      Set Pivot
+    </button>
+    <div class="separator"></div>
+    <button id="btn-section" title="Toggle Section Box Clipping">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+      Section Box
+    </button>
+    <button id="btn-section-panel" title="Section Box Controls" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
+    <div class="separator"></div>
+    <button id="btn-extents" title="Zoom to Extents">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+      Extents
+    </button>
+    <button id="btn-reset-pivot" title="Reset Pivot to Center">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+      Reset Pivot
+    </button>
+    <div class="separator"></div>
+    <button id="btn-wireframe" title="Wireframe Toggle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      Wireframe
+    </button>
+    <button id="btn-ghost" title="Ghost Mode">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2 3 3-3 3 3 2-3 3 3V10a8 8 0 0 0-8-8z"/></svg>
+      Ghost
+    </button>
+  </div>
+
+  <div class="section-panel" id="section-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/></svg>
+      Section Box
+    </div>
+    <div class="axis-group">
+      <div class="axis-label x-axis"><span class="dot"></span>X Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="x-min" min="0" max="100" value="0"><span id="x-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="x-max" min="0" max="100" value="100"><span id="x-max-val">100</span></div>
+    </div>
+    <div class="axis-group">
+      <div class="axis-label y-axis"><span class="dot"></span>Y Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="y-min" min="0" max="100" value="0"><span id="y-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="y-max" min="0" max="100" value="100"><span id="y-max-val">100</span></div>
+    </div>
+    <div class="axis-group">
+      <div class="axis-label z-axis"><span class="dot"></span>Z Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="z-min" min="0" max="100" value="0"><span id="z-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="z-max" min="0" max="100" value="100"><span id="z-max-val">100</span></div>
+    </div>
+    <button class="reset-btn" id="btn-reset-section">Reset Section Box</button>
+  </div>
+
+  <div class="info-panel">
+    <div class="title">Navigation</div>
+    <kbd>LMB</kbd> Orbit &nbsp; <kbd>RMB</kbd> Pan &nbsp; <kbd>Scroll</kbd> Zoom<br>
+    Use <strong>Set Pivot</strong> to pick an orbit center on the model<br>
+    Toggle <strong>Section Box</strong> to clip the model
+  </div>
+
+  <div class="pivot-indicator" id="pivot-indicator">
+    <div class="label">Pivot Point</div>
+    <div id="pivot-coords">0.00, 0.00, 0.00</div>
+  </div>
+
+  <div id="axes-container"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ============================================================
+//  VIEWER — Top-level orchestrator
+// ============================================================
+class Viewer {
+  constructor(container) {
+    this.container = container;
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x1a1d23);
+
+    this.camera = new THREE.PerspectiveCamera(
+      50, window.innerWidth / window.innerHeight, 0.1, 10000
+    );
+
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.localClippingEnabled = true;
+    container.appendChild(this.renderer.domElement);
+
+    this.raycaster = new THREE.Raycaster();
+    this._setupLights();
+    this._tickCallbacks = [];
+    this._grid = null;
+
+    window.addEventListener('resize', () => {
+      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  }
+
+  get canvas() { return this.renderer.domElement; }
+
+  _setupLights() {
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x362a1e, 0.3));
+    const d1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    d1.position.set(20, 30, 20);
+    d1.castShadow = true;
+    this.scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    d2.position.set(-15, 10, -10);
+    this.scene.add(d2);
+  }
+
+  setupGrid(modelSpan) {
+    if (this._grid) this.scene.remove(this._grid);
+    const gridSize = modelSpan * 3;
+    const divisions = Math.max(10, Math.round(gridSize / (modelSpan * 0.1)));
+    this._grid = new THREE.GridHelper(gridSize, divisions, 0x333840, 0x262a30);
+    this.scene.add(this._grid);
+  }
+
+  setupCameraClip(modelSpan) {
+    this.camera.near = modelSpan * 0.001;
+    this.camera.far = modelSpan * 100;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Raycast against a specific group, optionally excluding objects.
+   * @param {MouseEvent} event
+   * @param {THREE.Group} targetGroup
+   * @param {Set} [exclude] - set of THREE.Object3D to skip
+   */
+  raycast(event, targetGroup, exclude) {
+    const rect = this.canvas.getBoundingClientRect();
+    const mouse = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    this.raycaster.setFromCamera(mouse, this.camera);
+    const hits = this.raycaster.intersectObjects(targetGroup.children, true);
+    if (exclude && exclude.size > 0) {
+      return hits.filter(h => !exclude.has(h.object));
+    }
+    return hits;
+  }
+
+  onTick(fn) { this._tickCallbacks.push(fn); }
+
+  start() {
+    const loop = () => {
+      requestAnimationFrame(loop);
+      for (const fn of this._tickCallbacks) fn();
+      this.renderer.render(this.scene, this.camera);
+    };
+    loop();
+  }
+}
+
+
+// ============================================================
+//  CAMERA CONTROLLER — Orbit, pan, zoom, pivot
+//  Modes: 'orbit' (default) and 'set-pivot'
+//  In set-pivot mode a preview dot tracks the model surface,
+//  and clicking commits the pivot. You can't set a pivot in
+//  empty space.
+// ============================================================
+class CameraController {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.camera = viewer.camera;
+    this.canvas = viewer.canvas;
+
+    this.pivot = new THREE.Vector3();
+    this.spherical = { theta: Math.PI / 4, phi: Math.PI / 3, radius: 30 };
+
+    /** Current interaction mode: 'orbit' | 'set-pivot' */
+    this.mode = 'orbit';
+
+    // Scale-dependent (set via setScale)
+    this._scale = 1;
+    this._minDist = 0.5;
+    this._maxDist = 500;
+    this._surfaceOffset = 0.02;
+
+    this._isOrbiting = false;
+    this._isPanning = false;
+    this._prev = { x: 0, y: 0 };
+
+    // Committed pivot marker (cyan crosshair)
+    this._pivotMarker = this._createPivotMarker();
+    viewer.scene.add(this._pivotMarker);
+
+    // Hover preview dot (warm yellow, renders on top)
+    this._previewDot = this._createPreviewDot();
+    this._previewDot.visible = false;
+    viewer.scene.add(this._previewDot);
+
+    // Track objects to exclude from model raycasts
+    this._excluded = new Set();
+    this._collectExcluded(this._pivotMarker);
+    this._collectExcluded(this._previewDot);
+
+    // Model group — set via setTargetGroup()
+    this._targetGroup = null;
+
+    this._bindMouse();
+    viewer.onTick(() => this._tick());
+  }
+
+  // -- Public API --
+
+  setScale(modelSpan) {
+    this._scale = modelSpan;
+    this._minDist = modelSpan * 0.05;
+    this._maxDist = modelSpan * 20;
+    this._surfaceOffset = modelSpan * 0.002;
+    this._rebuildPivotMarker();
+    this._rebuildPreviewDot();
+  }
+
+  setTargetGroup(group) { this._targetGroup = group; }
+
+  setMode(newMode) {
+    this.mode = newMode;
+    if (newMode !== 'set-pivot') {
+      this._previewDot.visible = false;
+      this.canvas.style.cursor = '';
+    } else {
+      this.canvas.style.cursor = 'crosshair';
+    }
+    this.onModeChanged?.(newMode);
+  }
+
+  setPivot(point) {
+    this.pivot.copy(point);
+    this._pivotMarker.position.copy(point);
+    this._updateCamera();
+    this.onPivotChanged?.(this.pivot);
+  }
+
+  zoomToExtents(bounds) {
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    bounds.getCenter(center);
+    bounds.getSize(size);
+    this.spherical.radius = Math.max(size.x, size.y, size.z) * 1.5;
+    this.setPivot(center);
+  }
+
+  resetPivotToCenter(bounds) {
+    const center = new THREE.Vector3();
+    bounds.getCenter(center);
+    this.setPivot(center);
+  }
+
+  onPivotChanged = null;
+  onModeChanged = null;
+
+  // -- Excluded-object tracking --
+
+  _collectExcluded(obj) {
+    obj.traverse(child => this._excluded.add(child));
+  }
+
+  _removeExcluded(obj) {
+    obj.traverse(child => this._excluded.delete(child));
+  }
+
+  /** Raycast model only, filtering out our own helper meshes */
+  _raycastModel(event) {
+    if (!this._targetGroup) return [];
+    return this.viewer.raycast(event, this._targetGroup, this._excluded);
+  }
+
+  // -- Pivot Marker (cyan crosshair) --
+
+  _createPivotMarker() {
+    const group = new THREE.Group();
+    const s = this._scale * 0.015 || 0.15;
+
+    group.add(new THREE.Mesh(
+      new THREE.SphereGeometry(s, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.6 })
+    ));
+
+    const mat = new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.4 });
+    const cs = s * 3.5;
+    [[[-cs,0,0],[cs,0,0]], [[0,-cs,0],[0,cs,0]], [[0,0,-cs],[0,0,cs]]].forEach(([a, b]) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b], 3));
+      group.add(new THREE.Line(g, mat));
+    });
+    return group;
+  }
+
+  _rebuildPivotMarker() {
+    const pos = this._pivotMarker.position.clone();
+    this._removeExcluded(this._pivotMarker);
+    this.viewer.scene.remove(this._pivotMarker);
+    this._pivotMarker = this._createPivotMarker();
+    this._pivotMarker.position.copy(pos);
+    this._collectExcluded(this._pivotMarker);
+    this.viewer.scene.add(this._pivotMarker);
+  }
+
+  // -- Preview Dot (warm yellow, renders on top) --
+
+  _createPreviewDot() {
+    const s = this._scale * 0.008 || 0.08;
+    const group = new THREE.Group();
+
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(s, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfff176, transparent: true, opacity: 0.9, depthTest: false })
+    );
+    core.renderOrder = 999;
+    group.add(core);
+
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(s * 2.5, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfff176, transparent: true, opacity: 0.15, depthTest: false })
+    );
+    glow.renderOrder = 999;
+    group.add(glow);
+
+    return group;
+  }
+
+  _rebuildPreviewDot() {
+    const wasVisible = this._previewDot.visible;
+    const pos = this._previewDot.position.clone();
+    this._removeExcluded(this._previewDot);
+    this.viewer.scene.remove(this._previewDot);
+    this._previewDot = this._createPreviewDot();
+    this._previewDot.position.copy(pos);
+    this._previewDot.visible = wasVisible;
+    this._collectExcluded(this._previewDot);
+    this.viewer.scene.add(this._previewDot);
+  }
+
+  // -- Camera Math --
+
+  _updateCamera() {
+    const { theta, phi, radius } = this.spherical;
+    this.camera.position.set(
+      this.pivot.x + radius * Math.sin(phi) * Math.cos(theta),
+      this.pivot.y + radius * Math.cos(phi),
+      this.pivot.z + radius * Math.sin(phi) * Math.sin(theta)
+    );
+    this.camera.lookAt(this.pivot);
+  }
+
+  // -- Mouse Handling --
+
+  _bindMouse() {
+    this.canvas.addEventListener('mousedown', (e) => {
+      // --- Set Pivot mode: left-click commits ---
+      if (this.mode === 'set-pivot' && e.button === 0) {
+        const hits = this._raycastModel(e);
+        if (hits.length > 0) {
+          this.setPivot(hits[0].point);
+          this.setMode('orbit'); // auto-return to orbit
+        }
+        // If no hit on model surface, do nothing (can't set pivot in air)
+        return;
+      }
+
+      // --- Normal orbit / pan ---
+      if (e.button === 0) this._isOrbiting = true;
+      if (e.button === 2) this._isPanning = true;
+      this._prev = { x: e.clientX, y: e.clientY };
+      this._previewDot.visible = false;
+    });
+
+    this.canvas.addEventListener('mousemove', (e) => {
+      const dx = e.clientX - this._prev.x;
+      const dy = e.clientY - this._prev.y;
+
+      if (this._isOrbiting) {
+        this.spherical.theta -= dx * 0.005;
+        this.spherical.phi = Math.max(0.1, Math.min(
+          Math.PI - 0.1, this.spherical.phi - dy * 0.005
+        ));
+        this._updateCamera();
+      } else if (this._isPanning) {
+        const speed = this.spherical.radius * 0.002;
+        const fwd = new THREE.Vector3();
+        const right = new THREE.Vector3();
+        const up = new THREE.Vector3();
+        this.camera.getWorldDirection(fwd);
+        right.crossVectors(fwd, this.camera.up).normalize();
+        up.copy(this.camera.up).normalize();
+        this.pivot.add(right.multiplyScalar(-dx * speed));
+        this.pivot.add(up.multiplyScalar(dy * speed));
+        this._pivotMarker.position.copy(this.pivot);
+        this._updateCamera();
+        this.onPivotChanged?.(this.pivot);
+      } else if (this.mode === 'set-pivot') {
+        // Hover preview: dot follows model surface
+        const hits = this._raycastModel(e);
+        if (hits.length > 0) {
+          const hit = hits[0];
+          const offset = hit.face
+            ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).multiplyScalar(this._surfaceOffset)
+            : new THREE.Vector3();
+          this._previewDot.position.copy(hit.point).add(offset);
+          this._previewDot.visible = true;
+        } else {
+          this._previewDot.visible = false;
+        }
+      }
+
+      this._prev = { x: e.clientX, y: e.clientY };
+    });
+
+    this.canvas.addEventListener('mouseup', () => {
+      this._isOrbiting = false;
+      this._isPanning = false;
+    });
+
+    this.canvas.addEventListener('mouseleave', () => {
+      this._previewDot.visible = false;
+    });
+
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.spherical.radius *= 1 + e.deltaY * 0.001;
+      this.spherical.radius = Math.max(this._minDist, Math.min(this._maxDist, this.spherical.radius));
+      this._updateCamera();
+    }, { passive: false });
+
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  _tick() {
+    this._pivotMarker.rotation.y += 0.01;
+  }
+}
+
+
+// ============================================================
+//  SECTION BOX — 6 axis-aligned clipping planes + wireframe
+// ============================================================
+class SectionBox {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.enabled = false;
+    this.fullBounds = new THREE.Box3();
+    this.bounds = new THREE.Box3();
+
+    this.planes = [
+      new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), 0),
+      new THREE.Plane(new THREE.Vector3(0, -1, 0), 0),
+      new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+      new THREE.Plane(new THREE.Vector3(0, 0, -1), 0),
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+    ];
+
+    this._helper = null;
+  }
+
+  setFullBounds(box) {
+    this.fullBounds.copy(box);
+    this.reset();
+  }
+
+  enable() {
+    this.enabled = true;
+    this.reset();
+    this._updatePlanes();
+    this.onChange?.(this.bounds);
+  }
+
+  disable() {
+    this.enabled = false;
+    if (this._helper) this._helper.visible = false;
+  }
+
+  reset() {
+    this.bounds.copy(this.fullBounds);
+    const pad = this.fullBounds.getSize(new THREE.Vector3()).length() * 0.02;
+    this.bounds.expandByScalar(pad);
+  }
+
+  getActiveBounds() {
+    return this.enabled ? this.bounds : this.fullBounds;
+  }
+
+  setFace(axis, side, pct) {
+    const pad = this.fullBounds.getSize(new THREE.Vector3()).length() * 0.02;
+    const lo = this.fullBounds.min[axis] - pad;
+    const hi = this.fullBounds.max[axis] + pad;
+    this.bounds[side][axis] = lo + pct * (hi - lo);
+    this._updatePlanes();
+    this.onChange?.(this.bounds);
+  }
+
+  onChange = null;
+
+  _updatePlanes() {
+    const { min, max } = this.bounds;
+    this.planes[0].set(new THREE.Vector3(-1, 0, 0), max.x);
+    this.planes[1].set(new THREE.Vector3(1, 0, 0), -min.x);
+    this.planes[2].set(new THREE.Vector3(0, -1, 0), max.y);
+    this.planes[3].set(new THREE.Vector3(0, 1, 0), -min.y);
+    this.planes[4].set(new THREE.Vector3(0, 0, -1), max.z);
+    this.planes[5].set(new THREE.Vector3(0, 0, 1), -min.z);
+    this._updateHelper();
+  }
+
+  _updateHelper() {
+    if (this._helper) this.viewer.scene.remove(this._helper);
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    this.bounds.getSize(size);
+    this.bounds.getCenter(center);
+
+    this._helper = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)),
+      new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.7 })
+    );
+    this._helper.position.copy(center);
+    this._helper.visible = this.enabled;
+    this.viewer.scene.add(this._helper);
+  }
+}
+
+
+// ============================================================
+//  MODEL MANAGER — Geometry, display modes, clipping
+// ============================================================
+class ModelManager {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.group = new THREE.Group();
+    viewer.scene.add(this.group);
+  }
+
+  getBounds() { return new THREE.Box3().setFromObject(this.group); }
+
+  getSpan() {
+    const size = new THREE.Vector3();
+    this.getBounds().getSize(size);
+    return Math.max(size.x, size.y, size.z);
+  }
+
+  setClippingPlanes(planes) {
+    this._eachMaterial(mat => {
+      mat.clippingPlanes = planes;
+      mat.clipShadows = true;
+      mat.needsUpdate = true;
+    });
+  }
+
+  clearClippingPlanes() {
+    this._eachMaterial(mat => { mat.clippingPlanes = []; mat.needsUpdate = true; });
+  }
+
+  setWireframe(on) { this._eachMaterial(mat => { mat.wireframe = on; }); }
+
+  setGhost(on) {
+    this._eachMaterial(mat => {
+      mat.transparent = true;
+      mat.opacity = on ? 0.25 : 1.0;
+      mat.needsUpdate = true;
+    });
+  }
+
+  buildDemoModel() {
+    const m = (color) => new THREE.MeshStandardMaterial({
+      color, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide,
+    });
+
+    const add = (geo, mat, pos, rot) => {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(...pos);
+      if (rot) mesh.rotation.set(...rot);
+      this.group.add(mesh);
+    };
+
+    const B = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+    const C = (r, h) => new THREE.CylinderGeometry(r, r, h, 8);
+
+    const wall = m(0xd4c9a8), wall2 = m(0xcec3a2), slab = m(0x8d8d8d);
+    const col = m(0x607d8b), stair = m(0x78909c);
+    const pipe = m(0x42a5f5), duct = m(0xbdbdbd), wood = m(0x8d6e63);
+
+    add(B(16,.4,12), slab, [0,-.2,0]);
+    add(B(16,.3,12), slab, [0,4.15,0]);
+    add(B(17,.3,13), m(0x6d6d6d), [0,8.15,0]);
+
+    add(B(4,4,.3), wall, [-6,2,6]);
+    add(B(3,4,.3), wall, [-1.5,2,6]);
+    add(B(4,4,.3), wall, [4,2,6]);
+    add(B(16,1,.3), wall, [0,3.5,6]);
+    add(B(16,4,.3), wall, [0,2,-6]);
+    add(B(.3,4,12), wall, [-8,2,0]);
+    add(B(.3,4,12), wall, [8,2,0]);
+    add(B(.3,4,8), m(0xc4b998), [-2,2,-1]);
+
+    add(B(16,4,.3), wall2, [0,6.3,6]);
+    add(B(16,4,.3), wall2, [0,6.3,-6]);
+    add(B(.3,4,12), wall2, [-8,6.3,0]);
+    add(B(.3,4,12), wall2, [8,6.3,0]);
+    add(B(10,4,.3), m(0xbeb494), [2,6.3,0]);
+
+    [[-6,-4],[-6,4],[0,-4],[0,4],[6,-4],[6,4]].forEach(([x,z]) => {
+      add(B(.5,8.3,.5), col, [x,4.15,z]);
+    });
+
+    for (let i = 0; i < 10; i++) add(B(2,.2,.8), stair, [6,.1+i*.4,-4+i*.5]);
+
+    add(C(.1,14), pipe, [0,3.8,3], [0,0,Math.PI/2]);
+    add(C(.1,10), pipe, [-5,3.8,0], [Math.PI/2,0,0]);
+    add(B(12,.6,.8), duct, [1,7.6,2]);
+
+    add(B(2,.1,1), wood, [-5,.75,1]);
+    [[-.9,-.4],[.9,-.4],[-.9,.4],[.9,.4]].forEach(([dx,dz]) => {
+      add(B(.1,.75,.1), wood, [-5+dx,.375,1+dz]);
+    });
+  }
+
+  _eachMaterial(fn) {
+    this.group.traverse(child => { if (child.isMesh) fn(child.material); });
+  }
+}
+
+
+// ============================================================
+//  AXES HELPER
+// ============================================================
+class AxesHelper {
+  constructor(viewer, containerEl) {
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setSize(100, 100);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    containerEl.appendChild(this.renderer.domElement);
+
+    const axis = (dir, color) => {
+      const g = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color });
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,1.5,8), mat);
+      shaft.position.copy(dir.clone().multiplyScalar(.75));
+      if (dir.x) shaft.rotation.z = -Math.PI/2 * Math.sign(dir.x);
+      if (dir.z) shaft.rotation.x = Math.PI/2 * Math.sign(dir.z);
+      g.add(shaft);
+      const tip = new THREE.Mesh(new THREE.CylinderGeometry(0,.1,.25,8), mat);
+      tip.position.copy(dir.clone().multiplyScalar(1.6));
+      if (dir.x) tip.rotation.z = -Math.PI/2 * Math.sign(dir.x);
+      if (dir.z) tip.rotation.x = Math.PI/2 * Math.sign(dir.z);
+      g.add(tip);
+      return g;
+    };
+
+    this.scene.add(axis(new THREE.Vector3(1,0,0), 0xe57373));
+    this.scene.add(axis(new THREE.Vector3(0,1,0), 0x81c784));
+    this.scene.add(axis(new THREE.Vector3(0,0,1), 0x4fc3f7));
+    this.scene.add(new THREE.Mesh(
+      new THREE.SphereGeometry(.12,12,12),
+      new THREE.MeshBasicMaterial({ color: 0x666666 })
+    ));
+
+    viewer.onTick(() => {
+      const dir = new THREE.Vector3();
+      viewer.camera.getWorldDirection(dir);
+      this.camera.position.copy(dir.multiplyScalar(-4));
+      this.camera.lookAt(0,0,0);
+      this.renderer.render(this.scene, this.camera);
+    });
+  }
+}
+
+
+// ============================================================
+//  UI CONTROLLER — Thin glue between DOM and managers
+// ============================================================
+class UIController {
+  constructor({ viewer, cameraController, sectionBox, modelManager }) {
+    this.cam = cameraController;
+    this.section = sectionBox;
+    this.model = modelManager;
+    this._wireframeOn = false;
+    this._ghostOn = false;
+    this._bindToolbar();
+    this._bindSectionSliders();
+    this._bindPivotDisplay();
+  }
+
+  _bindToolbar() {
+    const $ = id => document.getElementById(id);
+
+    // --- Mode buttons (orbit / set-pivot) ---
+    const modeButtons = ['btn-orbit', 'btn-set-pivot'];
+
+    const syncModeButtons = (mode) => {
+      const btnId = mode === 'set-pivot' ? 'btn-set-pivot' : 'btn-orbit';
+      modeButtons.forEach(id => $(id).classList.toggle('active', id === btnId));
+    };
+
+    $('btn-orbit').addEventListener('click', () => { this.cam.setMode('orbit'); });
+    $('btn-set-pivot').addEventListener('click', () => { this.cam.setMode('set-pivot'); });
+
+    // Sync buttons when camera controller changes mode (e.g. auto-return to orbit)
+    this.cam.onModeChanged = (mode) => syncModeButtons(mode);
+
+    // --- Section Box: toggle clipping on/off ---
+    $('btn-section').addEventListener('click', () => {
+      const on = !this.section.enabled;
+      $('btn-section').classList.toggle('active', on);
+
+      if (on) {
+        this.section.enable();
+        this.model.setClippingPlanes(this.section.planes);
+        this._resetSliders();
+        // Show gear button and auto-open panel
+        $('btn-section-panel').style.display = '';
+        $('btn-section-panel').classList.add('active');
+        $('section-panel').classList.add('visible');
+      } else {
+        this.section.disable();
+        this.model.clearClippingPlanes();
+        // Hide gear button and panel
+        $('btn-section-panel').style.display = 'none';
+        $('btn-section-panel').classList.remove('active');
+        $('section-panel').classList.remove('visible');
+      }
+    });
+
+    // --- Section panel: open/close independently of clipping ---
+    $('btn-section-panel').addEventListener('click', () => {
+      const visible = $('section-panel').classList.toggle('visible');
+      $('btn-section-panel').classList.toggle('active', visible);
+    });
+
+    // --- Other toolbar buttons ---
+    $('btn-extents').addEventListener('click', () => {
+      this.cam.zoomToExtents(this.section.getActiveBounds());
+    });
+
+    $('btn-reset-pivot').addEventListener('click', () => {
+      this.cam.resetPivotToCenter(this.section.getActiveBounds());
+    });
+
+    $('btn-wireframe').addEventListener('click', () => {
+      this._wireframeOn = !this._wireframeOn;
+      $('btn-wireframe').classList.toggle('active', this._wireframeOn);
+      this.model.setWireframe(this._wireframeOn);
+    });
+
+    $('btn-ghost').addEventListener('click', () => {
+      this._ghostOn = !this._ghostOn;
+      $('btn-ghost').classList.toggle('active', this._ghostOn);
+      this.model.setGhost(this._ghostOn);
+    });
+
+    $('btn-reset-section').addEventListener('click', () => {
+      this.section.reset();
+      this.section.enable();
+      this.model.setClippingPlanes(this.section.planes);
+      this._resetSliders();
+      this.cam.zoomToExtents(this.section.getActiveBounds());
+    });
+  }
+
+  _bindSectionSliders() {
+    ['x','y','z'].forEach(axis => {
+      ['min','max'].forEach(side => {
+        const slider = document.getElementById(`${axis}-${side}`);
+        const label = document.getElementById(`${axis}-${side}-val`);
+        slider.addEventListener('input', () => {
+          const pct = parseInt(slider.value) / 100;
+          label.textContent = Math.round(pct * 100);
+          this.section.setFace(axis, side, pct);
+        });
+      });
+    });
+  }
+
+  _resetSliders() {
+    ['x','y','z'].forEach(axis => {
+      document.getElementById(`${axis}-min`).value = 0;
+      document.getElementById(`${axis}-max`).value = 100;
+      document.getElementById(`${axis}-min-val`).textContent = '0';
+      document.getElementById(`${axis}-max-val`).textContent = '100';
+    });
+  }
+
+  _bindPivotDisplay() {
+    const el = document.getElementById('pivot-coords');
+    const update = (p) => {
+      el.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`;
+    };
+    this.cam.onPivotChanged = update;
+    update(this.cam.pivot);
+
+    // Auto-center pivot only when section panel is open (actively adjusting)
+    this.section.onChange = (bounds) => {
+      if (document.getElementById('section-panel').classList.contains('visible')) {
+        const center = new THREE.Vector3();
+        bounds.getCenter(center);
+        this.cam.setPivot(center);
+      }
+    };
+  }
+}
+
+
+// ============================================================
+//  BOOTSTRAP
+// ============================================================
+(function main() {
+  const container = document.getElementById('canvas-container');
+
+  const viewer = new Viewer(container);
+  const cameraController = new CameraController(viewer);
+  const sectionBox = new SectionBox(viewer);
+  const modelManager = new ModelManager(viewer);
+  const axesHelper = new AxesHelper(viewer, document.getElementById('axes-container'));
+
+  modelManager.buildDemoModel();
+
+  const bounds = modelManager.getBounds();
+  const span = modelManager.getSpan();
+
+  viewer.setupGrid(span);
+  viewer.setupCameraClip(span);
+  sectionBox.setFullBounds(bounds);
+  cameraController.setScale(span);
+  cameraController.setTargetGroup(modelManager.group);
+
+  cameraController.zoomToExtents(bounds);
+  cameraController.spherical.theta = Math.PI / 4;
+  cameraController.spherical.phi = Math.PI / 3;
+  cameraController.spherical.radius = span * 2;
+
+  new UIController({ viewer, cameraController, sectionBox, modelManager });
+
+  viewer.start();
+  setTimeout(() => document.getElementById('loading').classList.add('hidden'), 400);
+})();
+</script>
+</body>
+</html>
