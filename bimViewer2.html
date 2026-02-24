@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BIM Section Box Viewer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-dark: #1a1d23;
+    --bg-panel: #22262e;
+    --bg-panel-hover: #2a2f38;
+    --bg-item: #282c35;
+    --border: #333840;
+    --text-primary: #e8eaed;
+    --text-secondary: #9aa0a8;
+    --text-dim: #666b73;
+    --accent: #4fc3f7;
+    --accent-dim: rgba(79, 195, 247, 0.15);
+    --accent-glow: rgba(79, 195, 247, 0.3);
+    --select-color: #ffb74d;
+    --select-dim: rgba(255, 183, 77, 0.15);
+    --measure-color: #81c784;
+    --x-color: #e57373;
+    --y-color: #81c784;
+    --z-color: #4fc3f7;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh; width: 100vw;
+  }
+
+  #canvas-container { width: 100%; height: 100%; position: relative; }
+  canvas { display: block; }
+
+  /* ---- Left Toolbar ---- */
+  .toolbar {
+    position: absolute; top: 16px; left: 16px;
+    display: flex; flex-direction: column; gap: 0;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 6px; z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    width: 46px;
+  }
+
+  .toolbar .tool-group {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 5px 0;
+  }
+
+  .toolbar .tool-group:not(:last-child) { border-bottom: 1px solid var(--border); }
+
+  .toolbar .group-label {
+    font-size: 7.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.6px; color: var(--text-dim);
+    text-align: center; padding: 1px 2px 3px; pointer-events: none;
+    line-height: 1;
+  }
+
+  .toolbar button {
+    background: transparent; border: none; color: var(--text-secondary);
+    width: 34px; height: 32px; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s ease; position: relative; margin: 0 auto;
+  }
+
+  .toolbar button:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+  .toolbar button.active { background: var(--accent-dim); color: var(--accent); }
+  .toolbar button svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+  .toolbar button::after {
+    content: attr(data-tip);
+    position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+    background: var(--bg-panel); border: 1px solid var(--border);
+    color: var(--text-primary); padding: 4px 10px; border-radius: 6px;
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
+    white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 0.15s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 200;
+  }
+
+  .toolbar button:hover::after { opacity: 1; }
+
+  .toolbar button.sub-btn { width: 28px; height: 26px; }
+  .toolbar button.sub-btn svg { width: 14px; height: 14px; }
+
+  /* ---- Flyout Panels ---- */
+  .flyout-panel {
+    position: absolute; top: 16px; left: 74px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px; z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); display: none;
+  }
+
+  .flyout-panel.visible { display: block; }
+
+  .flyout-panel .panel-title {
+    font-weight: 600; font-size: 12px; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 7px;
+    color: var(--text-primary);
+  }
+
+  .flyout-panel .panel-title svg { width: 14px; height: 14px; color: var(--accent); }
+
+  /* ---- Section Panel ---- */
+  #section-panel { width: 230px; }
+
+  .axis-group { margin-bottom: 8px; }
+
+  .axis-label {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 5px;
+  }
+
+  .axis-label .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .axis-label.x-axis .dot { background: var(--x-color); }
+  .axis-label.y-axis .dot { background: var(--y-color); }
+  .axis-label.z-axis .dot { background: var(--z-color); }
+
+  .slider-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+
+  .slider-row span {
+    font-size: 10px; color: var(--text-secondary); width: 26px; flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .slider-row span:first-child { text-align: right; }
+
+  input[type="range"] {
+    flex: 1; -webkit-appearance: none; height: 3px;
+    background: var(--bg-dark); border-radius: 2px; outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+    border: 2px solid var(--bg-panel); box-shadow: 0 0 6px var(--accent-glow);
+  }
+
+  .reset-btn {
+    width: 100%; margin-top: 6px; padding: 6px;
+    background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-secondary); font-family: 'DM Sans', sans-serif;
+    font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s ease;
+  }
+
+  .reset-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- Layer Panel ---- */
+  #layer-panel { width: 240px; max-height: 70vh; display: none; flex-direction: column; }
+  #layer-panel.visible { display: flex; }
+
+  #layer-list {
+    flex: 1; overflow-y: auto; margin-top: 4px;
+    max-height: calc(70vh - 80px);
+  }
+
+  #layer-list::-webkit-scrollbar { width: 4px; }
+  #layer-list::-webkit-scrollbar-track { background: transparent; }
+  #layer-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .layer-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    transition: background 0.1s ease; font-size: 12px;
+    margin-bottom: 1px;
+  }
+
+  .layer-item:hover { background: var(--bg-panel-hover); }
+  .layer-item.selected { background: var(--select-dim); }
+
+  .layer-swatch {
+    width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+  }
+
+  .layer-name {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-primary); font-size: 11px;
+  }
+
+  .layer-name.hidden-layer { color: var(--text-dim); text-decoration: line-through; }
+
+  .layer-vis {
+    background: none; border: none; color: var(--text-secondary);
+    cursor: pointer; padding: 2px; display: flex; align-items: center;
+    border-radius: 4px; transition: all 0.1s;
+  }
+
+  .layer-vis:hover { color: var(--text-primary); background: var(--bg-dark); }
+  .layer-vis.off { color: var(--text-dim); }
+  .layer-vis svg { width: 14px; height: 14px; }
+
+  .layer-actions {
+    display: flex; gap: 4px; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px;
+  }
+
+  .layer-actions button {
+    flex: 1; padding: 5px; background: var(--bg-dark); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text-secondary); font-family: 'DM Sans', sans-serif;
+    font-size: 10px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  }
+
+  .layer-actions button:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- Measure Panel ---- */
+  #measure-panel { width: 200px; }
+
+  .measure-result {
+    background: var(--bg-dark); border-radius: 6px; padding: 10px;
+    margin-top: 6px; text-align: center;
+  }
+
+  .measure-result .value {
+    font-family: 'JetBrains Mono', monospace; font-size: 18px;
+    font-weight: 600; color: var(--measure-color);
+  }
+
+  .measure-result .unit { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+  .measure-hint {
+    font-size: 11px; color: var(--text-secondary); line-height: 1.5;
+  }
+
+  .measure-hint strong { color: var(--text-primary); }
+
+  /* ---- Selection Info ---- */
+  #selection-info {
+    position: absolute; bottom: 16px; left: 74px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; z-index: 100;
+    font-size: 11px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    display: none; max-width: 280px;
+  }
+
+  #selection-info.visible { display: block; }
+
+  #selection-info .sel-title {
+    font-weight: 600; font-size: 12px; color: var(--select-color); margin-bottom: 4px;
+  }
+
+  #selection-info .sel-detail {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--text-secondary); line-height: 1.6;
+  }
+
+  /* ---- Bottom Panels ---- */
+  .info-panel {
+    position: absolute; bottom: 16px; left: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px; z-index: 100;
+    font-size: 11px; color: var(--text-secondary); line-height: 1.6;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); max-width: 280px;
+  }
+
+  .info-panel kbd {
+    background: var(--bg-dark); border: 1px solid var(--border); border-radius: 3px;
+    padding: 1px 5px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent);
+  }
+
+  .pivot-indicator {
+    position: absolute; bottom: 16px; right: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; z-index: 100;
+    font-size: 10px; font-family: 'JetBrains Mono', monospace;
+    color: var(--text-secondary); box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .pivot-indicator .label {
+    font-family: 'DM Sans', sans-serif; font-weight: 600; font-size: 10px;
+    color: var(--text-dim); margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  #axes-container {
+    position: absolute; bottom: 60px; right: 16px;
+    width: 90px; height: 90px; z-index: 100; pointer-events: none;
+  }
+
+  .loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg-dark); z-index: 1000; transition: opacity 0.5s ease;
+  }
+
+  .loading.hidden { opacity: 0; pointer-events: none; }
+  .loading-text { font-size: 14px; color: var(--text-secondary); animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+  <div class="loading" id="loading"><div class="loading-text">Initializing BIM Viewer...</div></div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="tool-group">
+      <div class="group-label">Mode</div>
+      <button id="btn-orbit" class="active" data-tip="Orbit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3c4 4 4 14 0 18"/><path d="M3 12h18"/></svg>
+      </button>
+      <button id="btn-select" data-tip="Select">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>
+      </button>
+      <button id="btn-set-pivot" data-tip="Set Pivot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="10" stroke-dasharray="2 3"/></svg>
+      </button>
+      <button id="btn-measure" data-tip="Measure">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.4 2.4 0 0 1 0-3.4l2.6-2.6a2.4 2.4 0 0 1 3.4 0zM14.5 12.5l-8-8"/><path d="M7.5 5.5l2 2M9.5 3.5l2 2M11.5 7.5l2 2"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">Clip</div>
+      <button id="btn-section" data-tip="Section Box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+      </button>
+      <button id="btn-section-panel" class="sub-btn" data-tip="Adjust" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">View</div>
+      <button id="btn-extents" data-tip="Extents">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+      </button>
+      <button id="btn-reset-pivot" data-tip="Center Pivot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+      </button>
+      <button id="btn-layers" data-tip="Layers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">Style</div>
+      <button id="btn-wireframe" data-tip="Wireframe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+      </button>
+      <button id="btn-ghost" data-tip="X-Ray">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="4"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Section Panel -->
+  <div class="flyout-panel" id="section-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/></svg>
+      Section Box
+    </div>
+    <div class="axis-group">
+      <div class="axis-label x-axis"><span class="dot"></span>X Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="x-min" min="0" max="100" value="0"><span id="x-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="x-max" min="0" max="100" value="100"><span id="x-max-val">100</span></div>
+    </div>
+    <div class="axis-group">
+      <div class="axis-label y-axis"><span class="dot"></span>Y Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="y-min" min="0" max="100" value="0"><span id="y-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="y-max" min="0" max="100" value="100"><span id="y-max-val">100</span></div>
+    </div>
+    <div class="axis-group">
+      <div class="axis-label z-axis"><span class="dot"></span>Z Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="z-min" min="0" max="100" value="0"><span id="z-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="z-max" min="0" max="100" value="100"><span id="z-max-val">100</span></div>
+    </div>
+    <button class="reset-btn" id="btn-reset-section">Reset Section Box</button>
+  </div>
+
+  <!-- Layer Panel -->
+  <div class="flyout-panel" id="layer-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Layers
+    </div>
+    <div id="layer-list"></div>
+    <div class="layer-actions">
+      <button id="btn-show-all">Show All</button>
+      <button id="btn-hide-all">Hide All</button>
+      <button id="btn-isolate-sel">Isolate Selected</button>
+    </div>
+  </div>
+
+  <!-- Measure Panel -->
+  <div class="flyout-panel" id="measure-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.4 2.4 0 0 1 0-3.4l2.6-2.6a2.4 2.4 0 0 1 3.4 0z"/></svg>
+      Measure
+    </div>
+    <div class="measure-hint" id="measure-hint">
+      Click <strong>two points</strong> on the model to measure the distance between them.
+    </div>
+    <div class="measure-result" id="measure-result" style="display:none;">
+      <div class="value" id="measure-value">0.00</div>
+      <div class="unit">units</div>
+    </div>
+    <button class="reset-btn" id="btn-clear-measure" style="margin-top:8px;">Clear Measurement</button>
+  </div>
+
+  <!-- Selection Info -->
+  <div id="selection-info">
+    <div class="sel-title" id="sel-name">—</div>
+    <div class="sel-detail" id="sel-detail"></div>
+  </div>
+
+  <!-- Bottom panels -->
+  <div class="info-panel">
+    <kbd>LMB</kbd> Orbit &nbsp; <kbd>RMB</kbd> Pan &nbsp; <kbd>Scroll</kbd> Zoom
+  </div>
+
+  <div class="pivot-indicator">
+    <div class="label">Pivot</div>
+    <div id="pivot-coords">0.00, 0.00, 0.00</div>
+  </div>
+
+  <div id="axes-container"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ============================================================
+//  VIEWER
+// ============================================================
+class Viewer {
+  constructor(container) {
+    this.container = container;
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x1a1d23);
+    this.camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 10000);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.localClippingEnabled = true;
+    container.appendChild(this.renderer.domElement);
+    this.raycaster = new THREE.Raycaster();
+    this._setupLights();
+    this._ticks = [];
+    this._grid = null;
+    addEventListener('resize', () => {
+      this.camera.aspect = innerWidth / innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(innerWidth, innerHeight);
+    });
+  }
+  get canvas() { return this.renderer.domElement; }
+  _setupLights() {
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x362a1e, 0.3));
+    const d1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    d1.position.set(20, 30, 20); d1.castShadow = true; this.scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    d2.position.set(-15, 10, -10); this.scene.add(d2);
+  }
+  setupGrid(span) {
+    if (this._grid) this.scene.remove(this._grid);
+    const s = span * 3, d = Math.max(10, Math.round(s / (span * 0.1)));
+    this._grid = new THREE.GridHelper(s, d, 0x333840, 0x262a30);
+    this.scene.add(this._grid);
+  }
+  setupCameraClip(span) {
+    this.camera.near = span * 0.001; this.camera.far = span * 100;
+    this.camera.updateProjectionMatrix();
+  }
+  raycast(event, group, exclude) {
+    const r = this.canvas.getBoundingClientRect();
+    const m = new THREE.Vector2(
+      ((event.clientX - r.left) / r.width) * 2 - 1,
+      -((event.clientY - r.top) / r.height) * 2 + 1
+    );
+    this.raycaster.setFromCamera(m, this.camera);
+    const hits = this.raycaster.intersectObjects(group.children, true);
+    return exclude?.size ? hits.filter(h => !exclude.has(h.object)) : hits;
+  }
+  onTick(fn) { this._ticks.push(fn); }
+  start() {
+    const loop = () => { requestAnimationFrame(loop); this._ticks.forEach(f => f()); this.renderer.render(this.scene, this.camera); };
+    loop();
+  }
+}
+
+
+// ============================================================
+//  CAMERA CONTROLLER
+//  Modes: orbit, select, set-pivot, measure
+// ============================================================
+class CameraController {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.camera = viewer.camera;
+    this.canvas = viewer.canvas;
+    this.pivot = new THREE.Vector3();
+    this.spherical = { theta: Math.PI / 4, phi: Math.PI / 3, radius: 30 };
+    this.mode = 'orbit';
+    this._scale = 1; this._minDist = 0.5; this._maxDist = 500; this._surfaceOffset = 0.02;
+    this._isOrbiting = false; this._isPanning = false;
+    this._prev = { x: 0, y: 0 };
+    this._pivotMarker = this._createPivotMarker();
+    viewer.scene.add(this._pivotMarker);
+    this._previewDot = this._createPreviewDot();
+    this._previewDot.visible = false;
+    viewer.scene.add(this._previewDot);
+    this._excluded = new Set();
+    this._collect(this._pivotMarker);
+    this._collect(this._previewDot);
+    this._targetGroup = null;
+
+    // External click handlers for select/measure modes
+    this.onModelClick = null; // (hit) => void
+    this.onEmptyClick = null; // () => void
+    this.onHover = null; // (mesh|null) => void
+
+    this._bindMouse();
+    viewer.onTick(() => this._tick());
+  }
+
+  setScale(span) {
+    this._scale = span;
+    this._minDist = span * 0.05; this._maxDist = span * 20;
+    this._surfaceOffset = span * 0.002;
+    this._rebuildPivotMarker(); this._rebuildPreviewDot();
+  }
+  setTargetGroup(g) { this._targetGroup = g; }
+  setMode(m) {
+    this.mode = m;
+    this._previewDot.visible = false;
+    this.onHover?.(null); // clear any hover highlight
+    this.canvas.style.cursor =
+      m === 'set-pivot' ? 'crosshair' :
+      m === 'select' ? 'pointer' :
+      m === 'measure' ? 'crosshair' : '';
+    this.onModeChanged?.(m);
+  }
+  setPivot(p) {
+    this.pivot.copy(p); this._pivotMarker.position.copy(p);
+    this._updateCamera(); this.onPivotChanged?.(this.pivot);
+  }
+  zoomToExtents(b) {
+    const c = new THREE.Vector3(), s = new THREE.Vector3();
+    b.getCenter(c); b.getSize(s);
+    this.spherical.radius = Math.max(s.x, s.y, s.z) * 1.5;
+    this.setPivot(c);
+  }
+  resetPivotToCenter(b) { const c = new THREE.Vector3(); b.getCenter(c); this.setPivot(c); }
+  onPivotChanged = null;
+  onModeChanged = null;
+
+  _collect(o) { o.traverse(c => this._excluded.add(c)); }
+  _uncollect(o) { o.traverse(c => this._excluded.delete(c)); }
+  _raycastModel(e) {
+    if (!this._targetGroup) return [];
+    return this.viewer.raycast(e, this._targetGroup, this._excluded);
+  }
+
+  _createPivotMarker() {
+    const g = new THREE.Group(), s = this._scale * 0.015 || 0.15;
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(s, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.6 })));
+    const mat = new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.4 });
+    const cs = s * 3.5;
+    [[[-cs,0,0],[cs,0,0]],[[0,-cs,0],[0,cs,0]],[[0,0,-cs],[0,0,cs]]].forEach(([a, b]) => {
+      const bg = new THREE.BufferGeometry();
+      bg.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b], 3));
+      g.add(new THREE.Line(bg, mat));
+    });
+    return g;
+  }
+  _rebuildPivotMarker() {
+    const p = this._pivotMarker.position.clone();
+    this._uncollect(this._pivotMarker); this.viewer.scene.remove(this._pivotMarker);
+    this._pivotMarker = this._createPivotMarker();
+    this._pivotMarker.position.copy(p); this._collect(this._pivotMarker);
+    this.viewer.scene.add(this._pivotMarker);
+  }
+
+  _createPreviewDot() {
+    const s = this._scale * 0.008 || 0.08, g = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.SphereGeometry(s, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfff176, transparent: true, opacity: 0.9, depthTest: false }));
+    core.renderOrder = 999; g.add(core);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(s * 2.5, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfff176, transparent: true, opacity: 0.15, depthTest: false }));
+    glow.renderOrder = 999; g.add(glow);
+    return g;
+  }
+  _rebuildPreviewDot() {
+    const v = this._previewDot.visible, p = this._previewDot.position.clone();
+    this._uncollect(this._previewDot); this.viewer.scene.remove(this._previewDot);
+    this._previewDot = this._createPreviewDot();
+    this._previewDot.position.copy(p); this._previewDot.visible = v;
+    this._collect(this._previewDot); this.viewer.scene.add(this._previewDot);
+  }
+
+  _updateCamera() {
+    const { theta, phi, radius } = this.spherical;
+    this.camera.position.set(
+      this.pivot.x + radius * Math.sin(phi) * Math.cos(theta),
+      this.pivot.y + radius * Math.cos(phi),
+      this.pivot.z + radius * Math.sin(phi) * Math.sin(theta)
+    );
+    this.camera.lookAt(this.pivot);
+  }
+
+  _bindMouse() {
+    this.canvas.addEventListener('mousedown', (e) => {
+      const isToolMode = this.mode === 'set-pivot' || this.mode === 'select' || this.mode === 'measure';
+      if (isToolMode && e.button === 0) {
+        const hits = this._raycastModel(e);
+        if (hits.length > 0) {
+          if (this.mode === 'set-pivot') { this.setPivot(hits[0].point); this.setMode('orbit'); }
+          else if (this.mode === 'select' || this.mode === 'measure') { this.onModelClick?.(hits[0]); }
+        } else {
+          // Clicked empty space — notify so selection can clear, etc.
+          this.onEmptyClick?.();
+        }
+        return;
+      }
+      if (e.button === 0) this._isOrbiting = true;
+      if (e.button === 2) this._isPanning = true;
+      this._prev = { x: e.clientX, y: e.clientY };
+      this._previewDot.visible = false;
+    });
+
+    this.canvas.addEventListener('mousemove', (e) => {
+      const dx = e.clientX - this._prev.x, dy = e.clientY - this._prev.y;
+      if (this._isOrbiting) {
+        this.spherical.theta -= dx * 0.005;
+        this.spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.spherical.phi - dy * 0.005));
+        this._updateCamera();
+      } else if (this._isPanning) {
+        const sp = this.spherical.radius * 0.002;
+        const fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3();
+        this.camera.getWorldDirection(fwd);
+        right.crossVectors(fwd, this.camera.up).normalize();
+        up.copy(this.camera.up).normalize();
+        this.pivot.add(right.multiplyScalar(-dx * sp));
+        this.pivot.add(up.multiplyScalar(dy * sp));
+        this._pivotMarker.position.copy(this.pivot);
+        this._updateCamera(); this.onPivotChanged?.(this.pivot);
+      } else if (this.mode === 'set-pivot' || this.mode === 'measure') {
+        const hits = this._raycastModel(e);
+        if (hits.length > 0) {
+          const h = hits[0];
+          const off = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld).multiplyScalar(this._surfaceOffset) : new THREE.Vector3();
+          this._previewDot.position.copy(h.point).add(off);
+          this._previewDot.visible = true;
+        } else { this._previewDot.visible = false; }
+      } else if (this.mode === 'select') {
+        const hits = this._raycastModel(e);
+        this.onHover?.(hits.length > 0 ? hits[0].object : null);
+      }
+      this._prev = { x: e.clientX, y: e.clientY };
+    });
+
+    this.canvas.addEventListener('mouseup', () => { this._isOrbiting = false; this._isPanning = false; });
+    this.canvas.addEventListener('mouseleave', () => { this._previewDot.visible = false; this.onHover?.(null); });
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.spherical.radius *= 1 + e.deltaY * 0.001;
+      this.spherical.radius = Math.max(this._minDist, Math.min(this._maxDist, this.spherical.radius));
+      this._updateCamera();
+    }, { passive: false });
+    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  _tick() { this._pivotMarker.rotation.y += 0.01; }
+}
+
+
+// ============================================================
+//  SECTION BOX
+// ============================================================
+class SectionBox {
+  constructor(viewer) {
+    this.viewer = viewer; this.enabled = false;
+    this.fullBounds = new THREE.Box3(); this.bounds = new THREE.Box3();
+    this.planes = Array.from({ length: 6 }, () => new THREE.Plane());
+    this._helper = null;
+  }
+  setFullBounds(b) { this.fullBounds.copy(b); this.reset(); }
+  enable() { this.enabled = true; this.reset(); this._updatePlanes(); this.onChange?.(this.bounds); }
+  disable() { this.enabled = false; if (this._helper) this._helper.visible = false; }
+  reset() {
+    this.bounds.copy(this.fullBounds);
+    this.bounds.expandByScalar(this.fullBounds.getSize(new THREE.Vector3()).length() * 0.02);
+  }
+  getActiveBounds() { return this.enabled ? this.bounds : this.fullBounds; }
+  setFace(axis, side, pct) {
+    const pad = this.fullBounds.getSize(new THREE.Vector3()).length() * 0.02;
+    const lo = this.fullBounds.min[axis] - pad, hi = this.fullBounds.max[axis] + pad;
+    this.bounds[side][axis] = lo + pct * (hi - lo);
+    this._updatePlanes(); this.onChange?.(this.bounds);
+  }
+  onChange = null;
+  _updatePlanes() {
+    const { min, max } = this.bounds;
+    const n = (x,y,z) => new THREE.Vector3(x,y,z);
+    this.planes[0].set(n(-1,0,0), max.x);  this.planes[1].set(n(1,0,0), -min.x);
+    this.planes[2].set(n(0,-1,0), max.y);  this.planes[3].set(n(0,1,0), -min.y);
+    this.planes[4].set(n(0,0,-1), max.z);  this.planes[5].set(n(0,0,1), -min.z);
+    this._updateHelper();
+  }
+  _updateHelper() {
+    if (this._helper) this.viewer.scene.remove(this._helper);
+    const s = new THREE.Vector3(), c = new THREE.Vector3();
+    this.bounds.getSize(s); this.bounds.getCenter(c);
+    this._helper = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(s.x, s.y, s.z)),
+      new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.7 })
+    );
+    this._helper.position.copy(c); this._helper.visible = this.enabled;
+    this.viewer.scene.add(this._helper);
+  }
+}
+
+
+// ============================================================
+//  MODEL MANAGER — with named meshes for layer panel
+// ============================================================
+class ModelManager {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.group = new THREE.Group();
+    viewer.scene.add(this.group);
+    /** @type {{ name: string, color: number, meshes: THREE.Mesh[] }[]} */
+    this.layers = [];
+  }
+  getBounds() { return new THREE.Box3().setFromObject(this.group); }
+  getSpan() { const s = new THREE.Vector3(); this.getBounds().getSize(s); return Math.max(s.x, s.y, s.z); }
+
+  setClippingPlanes(planes) { this._eachMat(m => { m.clippingPlanes = planes; m.clipShadows = true; m.needsUpdate = true; }); }
+  clearClippingPlanes() { this._eachMat(m => { m.clippingPlanes = []; m.needsUpdate = true; }); }
+  setWireframe(on) { this._eachMat(m => { m.wireframe = on; }); }
+  setGhost(on) { this._eachMat(m => { m.transparent = true; m.opacity = on ? 0.25 : 1.0; m.needsUpdate = true; }); }
+
+  buildDemoModel() {
+    const layers = {};
+    const mat = (color, layer) => {
+      const m = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+      if (!layers[layer]) layers[layer] = { name: layer, color, meshes: [] };
+      return { m, layer };
+    };
+    const add = (geo, { m, layer }, pos, rot, name) => {
+      const mesh = new THREE.Mesh(geo, m);
+      mesh.position.set(...pos);
+      if (rot) mesh.rotation.set(...rot);
+      mesh.userData.layerName = layer;
+      mesh.userData.displayName = name || layer;
+      this.group.add(mesh);
+      layers[layer].meshes.push(mesh);
+    };
+    const B = (w,h,d) => new THREE.BoxGeometry(w,h,d);
+    const C = (r,h) => new THREE.CylinderGeometry(r,r,h,8);
+
+    const slb = mat(0x8d8d8d, 'Slabs');
+    const roof = mat(0x6d6d6d, 'Roof');
+    const w1 = mat(0xd4c9a8, 'Walls - Ground');
+    const w2 = mat(0xcec3a2, 'Walls - Upper');
+    const iw = mat(0xc4b998, 'Interior Walls');
+    const cl = mat(0x607d8b, 'Columns');
+    const st = mat(0x78909c, 'Stairs');
+    const pp = mat(0x42a5f5, 'Pipes');
+    const dc = mat(0xbdbdbd, 'Ductwork');
+    const fn = mat(0x8d6e63, 'Furniture');
+
+    add(B(16,.4,12), slb, [0,-.2,0], null, 'Ground Slab');
+    add(B(16,.3,12), slb, [0,4.15,0], null, '2nd Floor Slab');
+    add(B(17,.3,13), roof, [0,8.15,0], null, 'Roof Slab');
+
+    add(B(4,4,.3), w1, [-6,2,6], null, 'Front Wall L');
+    add(B(3,4,.3), w1, [-1.5,2,6], null, 'Front Wall C');
+    add(B(4,4,.3), w1, [4,2,6], null, 'Front Wall R');
+    add(B(16,1,.3), w1, [0,3.5,6], null, 'Front Lintel');
+    add(B(16,4,.3), w1, [0,2,-6], null, 'Back Wall');
+    add(B(.3,4,12), w1, [-8,2,0], null, 'Left Wall');
+    add(B(.3,4,12), w1, [8,2,0], null, 'Right Wall');
+
+    add(B(.3,4,8), iw, [-2,2,-1], null, 'Int Wall GF');
+
+    add(B(16,4,.3), w2, [0,6.3,6], null, 'Front Wall 2F');
+    add(B(16,4,.3), w2, [0,6.3,-6], null, 'Back Wall 2F');
+    add(B(.3,4,12), w2, [-8,6.3,0], null, 'Left Wall 2F');
+    add(B(.3,4,12), w2, [8,6.3,0], null, 'Right Wall 2F');
+    add(B(10,4,.3), mat(0xbeb494, 'Interior Walls'), [2,6.3,0], null, 'Int Wall 2F');
+
+    [[-6,-4],[-6,4],[0,-4],[0,4],[6,-4],[6,4]].forEach(([x,z], i) => {
+      add(B(.5,8.3,.5), cl, [x,4.15,z], null, `Column ${i+1}`);
+    });
+
+    for (let i = 0; i < 10; i++) add(B(2,.2,.8), st, [6,.1+i*.4,-4+i*.5], null, `Stair ${i+1}`);
+
+    add(C(.1,14), pp, [0,3.8,3], [0,0,Math.PI/2], 'Pipe Run E-W');
+    add(C(.1,10), pp, [-5,3.8,0], [Math.PI/2,0,0], 'Pipe Run N-S');
+    add(B(12,.6,.8), dc, [1,7.6,2], null, 'Main Duct');
+
+    add(B(2,.1,1), fn, [-5,.75,1], null, 'Table Top');
+    [[-.9,-.4],[.9,-.4],[-.9,.4],[.9,.4]].forEach(([dx,dz], i) => {
+      add(B(.1,.75,.1), fn, [-5+dx,.375,1+dz], null, `Table Leg ${i+1}`);
+    });
+
+    this.layers = Object.values(layers);
+  }
+
+  _eachMat(fn) { this.group.traverse(c => { if (c.isMesh) fn(c.material); }); }
+}
+
+
+// ============================================================
+//  SELECTION MANAGER — committed selection + hover highlight
+// ============================================================
+class SelectionManager {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this._outlines = [];
+    this.selected = null;
+
+    // Hover state (lightweight, separate from selection)
+    this._hovered = null;
+    this._hoverOutline = null;
+  }
+
+  select(mesh) {
+    this.clearSelection();
+    if (!mesh) return;
+    this.selected = mesh;
+    this._addOutline(mesh, 0xffb74d, 0.9, 998);
+    this.onSelectionChanged?.(mesh);
+  }
+
+  clearSelection() {
+    this._outlines.forEach(o => this.viewer.scene.remove(o));
+    this._outlines = [];
+    this.selected = null;
+    this.onSelectionChanged?.(null);
+  }
+
+  /** Set hover highlight on a mesh (or null to clear) */
+  setHover(mesh) {
+    // Skip if already hovering this mesh or it's the selected mesh
+    if (mesh === this._hovered) return;
+    if (mesh === this.selected) { this._clearHover(); return; }
+
+    this._clearHover();
+    if (!mesh) return;
+
+    this._hovered = mesh;
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 15);
+    this._hoverOutline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+      color: 0xffffff, depthTest: false, transparent: true, opacity: 0.35,
+    }));
+    this._hoverOutline.renderOrder = 997;
+    this._hoverOutline.position.copy(mesh.position);
+    this._hoverOutline.rotation.copy(mesh.rotation);
+    this._hoverOutline.scale.copy(mesh.scale);
+    this.viewer.scene.add(this._hoverOutline);
+  }
+
+  _clearHover() {
+    if (this._hoverOutline) {
+      this.viewer.scene.remove(this._hoverOutline);
+      this._hoverOutline = null;
+    }
+    this._hovered = null;
+  }
+
+  _addOutline(mesh, color, opacity, order) {
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 15);
+    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+      color, linewidth: 1, depthTest: false, transparent: true, opacity,
+    }));
+    line.renderOrder = order;
+    line.position.copy(mesh.position);
+    line.rotation.copy(mesh.rotation);
+    line.scale.copy(mesh.scale);
+    this.viewer.scene.add(line);
+    this._outlines.push(line);
+  }
+
+  onSelectionChanged = null;
+}
+
+
+// ============================================================
+//  MEASURE TOOL — click two points, show distance + line
+// ============================================================
+class MeasureTool {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this._scale = 1;
+    this._points = [];
+    this._markers = [];
+    this._line = null;
+  }
+
+  setScale(span) { this._scale = span; }
+
+  addPoint(point) {
+    if (this._points.length >= 2) this.clear();
+    this._points.push(point.clone());
+
+    // Marker sphere
+    const s = this._scale * 0.012;
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(s, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0x81c784, depthTest: false, transparent: true, opacity: 0.9 })
+    );
+    marker.renderOrder = 999;
+    marker.position.copy(point);
+    this.viewer.scene.add(marker);
+    this._markers.push(marker);
+
+    if (this._points.length === 2) {
+      this._drawLine();
+      const dist = this._points[0].distanceTo(this._points[1]);
+      this.onMeasured?.(dist);
+    }
+  }
+
+  _drawLine() {
+    const geo = new THREE.BufferGeometry();
+    const pts = this._points;
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      pts[0].x, pts[0].y, pts[0].z, pts[1].x, pts[1].y, pts[1].z
+    ], 3));
+    this._line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color: 0x81c784, depthTest: false, transparent: true, opacity: 0.8,
+    }));
+    this._line.renderOrder = 999;
+    this.viewer.scene.add(this._line);
+  }
+
+  clear() {
+    this._markers.forEach(m => this.viewer.scene.remove(m));
+    this._markers = [];
+    if (this._line) { this.viewer.scene.remove(this._line); this._line = null; }
+    this._points = [];
+    this.onCleared?.();
+  }
+
+  onMeasured = null;
+  onCleared = null;
+}
+
+
+// ============================================================
+//  AXES HELPER
+// ============================================================
+class AxesHelper {
+  constructor(viewer, el) {
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setSize(90, 90);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    el.appendChild(this.renderer.domElement);
+    const ax = (d, c) => {
+      const g = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: c });
+      const s = new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,1.5,8), m);
+      s.position.copy(d.clone().multiplyScalar(.75));
+      if (d.x) s.rotation.z = -Math.PI/2*Math.sign(d.x);
+      if (d.z) s.rotation.x = Math.PI/2*Math.sign(d.z);
+      g.add(s);
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(0,.1,.25,8), m);
+      t.position.copy(d.clone().multiplyScalar(1.6));
+      if (d.x) t.rotation.z = -Math.PI/2*Math.sign(d.x);
+      if (d.z) t.rotation.x = Math.PI/2*Math.sign(d.z);
+      g.add(t); return g;
+    };
+    this.scene.add(ax(new THREE.Vector3(1,0,0), 0xe57373));
+    this.scene.add(ax(new THREE.Vector3(0,1,0), 0x81c784));
+    this.scene.add(ax(new THREE.Vector3(0,0,1), 0x4fc3f7));
+    this.scene.add(new THREE.Mesh(new THREE.SphereGeometry(.12,12,12), new THREE.MeshBasicMaterial({ color: 0x666666 })));
+    viewer.onTick(() => {
+      const d = new THREE.Vector3(); viewer.camera.getWorldDirection(d);
+      this.camera.position.copy(d.multiplyScalar(-4)); this.camera.lookAt(0,0,0);
+      this.renderer.render(this.scene, this.camera);
+    });
+  }
+}
+
+
+// ============================================================
+//  UI CONTROLLER — Coordinated state management
+//  Rules:
+//  - Only one flyout panel open at a time (section, layers, measure)
+//  - Entering measure mode opens measure panel; leaving closes it
+//  - Clicking empty space in select mode clears selection
+//  - Escape returns to orbit and closes panels
+//  - Section box clipping persists independently of its panel
+// ============================================================
+class UIController {
+  constructor({ viewer, cam, section, model, selection, measure }) {
+    this.viewer = viewer; this.cam = cam; this.section = section;
+    this.model = model; this.selection = selection; this.measure = measure;
+    this._wireOn = false; this._ghostOn = false;
+
+    // Track which flyout is currently open (null = none)
+    this._activeFlyout = null;
+
+    this._bindModes();
+    this._bindSection();
+    this._bindView();
+    this._bindStyle();
+    this._bindLayers();
+    this._bindMeasure();
+    this._bindSelection();
+    this._bindPivot();
+    this._bindEscape();
+  }
+
+  _$(id) { return document.getElementById(id); }
+
+  // ---- Flyout Panel Management ----
+
+  /** Close all flyout panels except the one specified */
+  _openFlyout(panelId) {
+    // Close any currently open flyout
+    this._closeFlyout();
+    if (panelId) {
+      this._$(panelId).classList.add('visible');
+      this._activeFlyout = panelId;
+    }
+    // Sync button active states for panel toggles
+    this._$('btn-section-panel')?.classList.toggle('active', panelId === 'section-panel');
+    this._$('btn-layers').classList.toggle('active', panelId === 'layer-panel');
+  }
+
+  _closeFlyout() {
+    ['section-panel', 'layer-panel', 'measure-panel'].forEach(id => {
+      this._$(id).classList.remove('visible');
+    });
+    this._$('btn-section-panel')?.classList.remove('active');
+    this._$('btn-layers').classList.remove('active');
+    this._activeFlyout = null;
+  }
+
+  _toggleFlyout(panelId) {
+    if (this._activeFlyout === panelId) {
+      this._closeFlyout();
+    } else {
+      this._openFlyout(panelId);
+    }
+  }
+
+  // ---- Escape Key ----
+
+  _bindEscape() {
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        // Clear selection
+        this.selection.clearSelection();
+        // Clear measure
+        this.measure.clear();
+        // Close flyouts (except section — that persists)
+        this._closeFlyout();
+        // Return to orbit mode
+        this.cam.setMode('orbit');
+      }
+    });
+  }
+
+  // ---- Modes ----
+  _bindModes() {
+    const modes = { 'btn-orbit': 'orbit', 'btn-select': 'select', 'btn-set-pivot': 'set-pivot', 'btn-measure': 'measure' };
+    const syncButtons = (mode) => {
+      Object.keys(modes).forEach(id => this._$(id).classList.toggle('active', modes[id] === mode));
+    };
+
+    Object.entries(modes).forEach(([id, mode]) => {
+      this._$(id).addEventListener('click', () => {
+        this.cam.setMode(mode);
+      });
+    });
+
+    this.cam.onModeChanged = (mode) => {
+      syncButtons(mode);
+      // Measure mode opens measure panel; leaving it closes it
+      if (mode === 'measure') {
+        this._openFlyout('measure-panel');
+      } else if (this._activeFlyout === 'measure-panel') {
+        this._closeFlyout();
+      }
+    };
+
+    // Route model clicks based on mode
+    this.cam.onModelClick = (hit) => {
+      if (this.cam.mode === 'select') { this.selection.select(hit.object); }
+      else if (this.cam.mode === 'measure') { this.measure.addPoint(hit.point); }
+    };
+
+    // Empty click clears selection in select mode
+    this.cam.onEmptyClick = () => {
+      if (this.cam.mode === 'select') { this.selection.clearSelection(); }
+    };
+
+    // Hover highlight in select mode
+    this.cam.onHover = (mesh) => {
+      this.selection.setHover(mesh);
+    };
+  }
+
+  // ---- Section Box ----
+  _bindSection() {
+    this._$('btn-section').addEventListener('click', () => {
+      const on = !this.section.enabled;
+      this._$('btn-section').classList.toggle('active', on);
+      if (on) {
+        this.section.enable(); this.model.setClippingPlanes(this.section.planes);
+        this._resetSliders();
+        this._$('btn-section-panel').style.display = '';
+        this._openFlyout('section-panel');
+      } else {
+        this.section.disable(); this.model.clearClippingPlanes();
+        this._$('btn-section-panel').style.display = 'none';
+        if (this._activeFlyout === 'section-panel') this._closeFlyout();
+      }
+    });
+
+    this._$('btn-section-panel').addEventListener('click', () => {
+      this._toggleFlyout('section-panel');
+    });
+
+    this._$('btn-reset-section').addEventListener('click', () => {
+      this.section.reset(); this.section.enable();
+      this.model.setClippingPlanes(this.section.planes);
+      this._resetSliders(); this.cam.zoomToExtents(this.section.getActiveBounds());
+    });
+
+    ['x','y','z'].forEach(a => ['min','max'].forEach(s => {
+      const sl = this._$(`${a}-${s}`), lb = this._$(`${a}-${s}-val`);
+      sl.addEventListener('input', () => {
+        const p = parseInt(sl.value) / 100; lb.textContent = Math.round(p * 100);
+        this.section.setFace(a, s, p);
+      });
+    }));
+
+    this.section.onChange = (bounds) => {
+      if (this._activeFlyout === 'section-panel') {
+        const c = new THREE.Vector3(); bounds.getCenter(c); this.cam.setPivot(c);
+      }
+    };
+  }
+
+  _resetSliders() {
+    ['x','y','z'].forEach(a => {
+      this._$(`${a}-min`).value = 0; this._$(`${a}-max`).value = 100;
+      this._$(`${a}-min-val`).textContent = '0'; this._$(`${a}-max-val`).textContent = '100';
+    });
+  }
+
+  // ---- View ----
+  _bindView() {
+    this._$('btn-extents').addEventListener('click', () => this.cam.zoomToExtents(this.section.getActiveBounds()));
+    this._$('btn-reset-pivot').addEventListener('click', () => this.cam.resetPivotToCenter(this.section.getActiveBounds()));
+    this._$('btn-layers').addEventListener('click', () => {
+      this._toggleFlyout('layer-panel');
+    });
+  }
+
+  // ---- Style ----
+  _bindStyle() {
+    this._$('btn-wireframe').addEventListener('click', () => {
+      this._wireOn = !this._wireOn;
+      this._$('btn-wireframe').classList.toggle('active', this._wireOn);
+      this.model.setWireframe(this._wireOn);
+    });
+    this._$('btn-ghost').addEventListener('click', () => {
+      this._ghostOn = !this._ghostOn;
+      this._$('btn-ghost').classList.toggle('active', this._ghostOn);
+      this.model.setGhost(this._ghostOn);
+    });
+  }
+
+  // ---- Layers ----
+  _bindLayers() {
+    const list = this._$('layer-list');
+    const eyeOpen = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    const eyeClosed = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+
+    this.model.layers.forEach((layer, idx) => {
+      const item = document.createElement('div');
+      item.className = 'layer-item'; item.dataset.idx = idx;
+
+      const swatch = document.createElement('div');
+      swatch.className = 'layer-swatch';
+      swatch.style.background = '#' + layer.color.toString(16).padStart(6, '0');
+
+      const name = document.createElement('span');
+      name.className = 'layer-name'; name.textContent = layer.name;
+
+      const vis = document.createElement('button');
+      vis.className = 'layer-vis'; vis.innerHTML = eyeOpen;
+
+      let visible = true;
+      vis.addEventListener('click', (e) => {
+        e.stopPropagation();
+        visible = !visible;
+        vis.innerHTML = visible ? eyeOpen : eyeClosed;
+        vis.classList.toggle('off', !visible);
+        name.classList.toggle('hidden-layer', !visible);
+        layer.meshes.forEach(m => { m.visible = visible; });
+      });
+
+      item.addEventListener('click', () => {
+        if (layer.meshes.length > 0) this.selection.select(layer.meshes[0]);
+      });
+
+      item.appendChild(swatch); item.appendChild(name); item.appendChild(vis);
+      list.appendChild(item);
+    });
+
+    this._$('btn-show-all').addEventListener('click', () => {
+      this.model.layers.forEach(l => l.meshes.forEach(m => { m.visible = true; }));
+      list.querySelectorAll('.layer-vis').forEach(b => { b.innerHTML = eyeOpen; b.classList.remove('off'); });
+      list.querySelectorAll('.layer-name').forEach(n => n.classList.remove('hidden-layer'));
+    });
+
+    this._$('btn-hide-all').addEventListener('click', () => {
+      this.model.layers.forEach(l => l.meshes.forEach(m => { m.visible = false; }));
+      list.querySelectorAll('.layer-vis').forEach(b => { b.innerHTML = eyeClosed; b.classList.add('off'); });
+      list.querySelectorAll('.layer-name').forEach(n => n.classList.add('hidden-layer'));
+    });
+
+    this._$('btn-isolate-sel').addEventListener('click', () => {
+      const sel = this.selection.selected;
+      if (!sel) return;
+      const selLayer = sel.userData.layerName;
+      this.model.layers.forEach((l, idx) => {
+        const show = l.name === selLayer;
+        l.meshes.forEach(m => { m.visible = show; });
+        const item = list.children[idx];
+        const btn = item.querySelector('.layer-vis');
+        const nm = item.querySelector('.layer-name');
+        btn.innerHTML = show ? eyeOpen : eyeClosed;
+        btn.classList.toggle('off', !show);
+        nm.classList.toggle('hidden-layer', !show);
+      });
+    });
+  }
+
+  // ---- Measure ----
+  _bindMeasure() {
+    this.measure.onMeasured = (dist) => {
+      this._$('measure-result').style.display = '';
+      this._$('measure-value').textContent = dist.toFixed(3);
+      this._$('measure-hint').innerHTML = 'Click two new points to re-measure.';
+    };
+    this.measure.onCleared = () => {
+      this._$('measure-result').style.display = 'none';
+      this._$('measure-hint').innerHTML = 'Click <strong>two points</strong> on the model to measure the distance between them.';
+    };
+    this._$('btn-clear-measure').addEventListener('click', () => this.measure.clear());
+  }
+
+  // ---- Selection ----
+  _bindSelection() {
+    const info = this._$('selection-info');
+    const list = this._$('layer-list');
+
+    this.selection.onSelectionChanged = (mesh) => {
+      if (mesh) {
+        info.classList.add('visible');
+        this._$('sel-name').textContent = mesh.userData.displayName || 'Unnamed';
+        const b = new THREE.Box3().setFromObject(mesh);
+        const s = new THREE.Vector3(); b.getSize(s);
+        this._$('sel-detail').innerHTML =
+          `Layer: ${mesh.userData.layerName || '—'}<br>` +
+          `Size: ${s.x.toFixed(2)} × ${s.y.toFixed(2)} × ${s.z.toFixed(2)}<br>` +
+          `Pos: ${mesh.position.x.toFixed(1)}, ${mesh.position.y.toFixed(1)}, ${mesh.position.z.toFixed(1)}`;
+        // Sync layer list highlight
+        list.querySelectorAll('.layer-item').forEach(item => {
+          const idx = parseInt(item.dataset.idx);
+          item.classList.toggle('selected', this.model.layers[idx].meshes.includes(mesh));
+        });
+      } else {
+        info.classList.remove('visible');
+        list.querySelectorAll('.layer-item').forEach(i => i.classList.remove('selected'));
+      }
+    };
+  }
+
+  // ---- Pivot Display ----
+  _bindPivot() {
+    const el = this._$('pivot-coords');
+    const up = p => { el.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`; };
+    this.cam.onPivotChanged = up;
+    up(this.cam.pivot);
+  }
+}
+
+
+// ============================================================
+//  BOOTSTRAP
+// ============================================================
+(function main() {
+  const container = document.getElementById('canvas-container');
+  const viewer = new Viewer(container);
+  const cam = new CameraController(viewer);
+  const section = new SectionBox(viewer);
+  const model = new ModelManager(viewer);
+  const selection = new SelectionManager(viewer);
+  const measure = new MeasureTool(viewer);
+  new AxesHelper(viewer, document.getElementById('axes-container'));
+
+  model.buildDemoModel();
+  const bounds = model.getBounds();
+  const span = model.getSpan();
+
+  viewer.setupGrid(span);
+  viewer.setupCameraClip(span);
+  section.setFullBounds(bounds);
+  cam.setScale(span);
+  cam.setTargetGroup(model.group);
+  measure.setScale(span);
+
+  cam.zoomToExtents(bounds);
+  cam.spherical.theta = Math.PI / 4;
+  cam.spherical.phi = Math.PI / 3;
+  cam.spherical.radius = span * 2;
+
+  new UIController({ viewer, cam, section, model, selection, measure });
+
+  viewer.start();
+  setTimeout(() => document.getElementById('loading').classList.add('hidden'), 400);
+})();
+</script>
+</body>
+</html>
