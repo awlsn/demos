@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vinyl Inventory</title>
+
+  <!-- AG Grid Enterprise via CDN (includes Community + Enterprise, auto-registers all modules) -->
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-enterprise@33.2.4/dist/ag-grid-enterprise.min.js"></script>
+
+  <style>
+    /* ── Reset & Root ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --layout-grid-header-height: 32px;
+      --layout-grid-margin: 32px;
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+      background: #f5f7fb;
+      color: #1f2933;
+    }
+
+    body { background: #f5f7fb; }
+    #app { min-height: 100vh; }
+
+    /* ── Layout ───────────────────────────────────────────── */
+    .wrapper  { min-height: 100vh; }
+    .container { width: 100%; }
+
+    .grid {
+      --ag-header-background-color: transparent;
+      height: calc(100vh - var(--layout-grid-header-height) - 62px - var(--layout-grid-margin));
+      margin: 0 var(--layout-grid-margin) var(--layout-grid-margin);
+    }
+
+    @media screen and (max-height: 720px) {
+      .grid { min-height: 500px; padding-bottom: 24px; }
+    }
+
+    .exampleHeader {
+      display: flex;
+      justify-content: space-between;
+      padding-bottom: 16px;
+      padding-top: 8px;
+      margin: var(--layout-grid-margin) var(--layout-grid-margin) 0;
+    }
+
+    /* ── Tabs ─────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      border-radius: 8px;
+      overflow: hidden;
+      padding: 4px;
+      background-color: #f9fafb;
+      border: 1px solid #eff0f1;
+      color: #39485d;
+    }
+
+    .tabButton {
+      appearance: none;
+      display: inline-block;
+      padding: 0.375em 1em 0.5em;
+      white-space: nowrap;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 6px;
+      border: none;
+      background-color: #f9fafb;
+      color: #39485d;
+      cursor: pointer;
+      box-shadow: none;
+      transition: background 0.3s, color 0.3s;
+    }
+    .tabButton:hover { background: rgba(57,72,93,0.13); }
+    .tabButton.active { background: #fff; color: #000; font-weight: 500; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+
+    /* ── Search ───────────────────────────────────────────── */
+    .inputWrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .inputWrapper svg { position: absolute; left: 8px; pointer-events: none; }
+    .inputWrapper input {
+      font-size: 14px;
+      padding: 0.375em 0.75em 0.375em 2.4em;
+      line-height: 1.4;
+      border-radius: 6px;
+      border: 1px solid #d0d5dd;
+      background-color: transparent;
+      outline: none;
+    }
+
+    /* ── AG Grid Overrides ────────────────────────────────── */
+    div.ag-theme-quartz { --ag-row-height: 42px; }
+
+    @media screen and (max-width: 720px) {
+      div.ag-theme-quartz { --ag-font-size: 12px; --ag-grid-size: 6px; }
+    }
+
+    .ag-theme-quartz .ag-body-viewport { padding-top: 8px; }
+    .ag-theme-quartz .ag-row-group .ag-icon { opacity: 0.5; }
+    .ag-theme-quartz .ag-row { border-bottom: none; }
+    .ag-theme-quartz .ag-row:not(.ag-row-level-1) { border-radius: 8px; overflow: hidden; }
+    .ag-theme-quartz .ag-row:not(.ag-row-level-1)::before {
+      content: "";
+      display: block;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      transition: background-color 0.33s ease-in-out;
+    }
+    .ag-theme-quartz .ag-cell-expandable { display: flex; justify-content: center; align-items: center; }
+    .ag-theme-quartz .ag-cell { display: flex; align-items: center; }
+    .ag-theme-quartz .ag-cell:first-child { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+    .ag-theme-quartz .ag-cell:last-child  { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+    .ag-theme-quartz .ag-right-aligned-cell { justify-content: flex-end; }
+    .ag-theme-quartz .ag-header {
+      background-color: #f9fafb;
+      color: #39485d;
+      border-radius: 8px;
+      border: 1px solid #eff0f1;
+    }
+    .ag-theme-quartz .ag-header-cell-text { color: #1f383c; display: flex; align-items: center; }
+    .ag-theme-quartz .ag-root-wrapper { border: none; }
+    .ag-theme-quartz .ag-full-width-container .ag-row,
+    .ag-theme-quartz .ag-full-width-container .ag-details-row { background-color: transparent; }
+    .ag-theme-quartz .ag-details-row { padding: 16px; }
+    .ag-theme-quartz .ag-paging-panel { height: 40px; }
+    .ag-theme-quartz .ag-paging-panel > span:last-child { margin-right: 0; }
+    .ag-center-cols-viewport { min-height: unset !important; }
+
+    /* ── Header icon decorators ───────────────────────────── */
+    /* Using text fallbacks since external SVG paths aren't available */
+    .header-status   .ag-header-cell-text::before,
+    .header-price    .ag-header-cell-text::before,
+    .header-sku      .ag-header-cell-text::before,
+    .header-inventory .ag-header-cell-text::before,
+    .header-product  .ag-header-cell-text::before,
+    .header-calendar .ag-header-cell-text::before,
+    .header-percentage .ag-header-cell-text::before {
+      padding-right: 4px;
+      opacity: 0.5;
+      font-size: 12px;
+    }
+
+    /* ── Cell Renderers ───────────────────────────────────── */
+    /* Price */
+    .price { display: flex; flex-direction: column; gap: 6px; }
+    .price span { line-height: 100%; }
+    .increase { opacity: 0.7; font-size: 12px; }
+
+    /* Product */
+    .productCell { height: 100%; display: flex; flex-direction: row; align-items: center; justify-content: center; }
+    .image { max-width: 100%; max-height: 100px; background-color: rgba(201,201,201,0.2); border-radius: 8px; margin: 8px; }
+    .image img { width: 60px; height: 60px; border-radius: 8px; }
+    .productCell div:first-child { font-weight: 500; }
+    .productCell div { padding-bottom: 0; line-height: 1.5; }
+    .stockCell {
+      background-color: #f9fafb;
+      color: #39485d;
+      width: fit-content;
+      border: 1px solid #c0c0c057;
+      border-radius: 6px;
+      padding: 2px 4px 0;
+      margin-top: 4px;
+      font-size: 12px;
+    }
+
+    /* Status tag */
+    .tag {
+      border-radius: 100px;
+      padding-left: 4px;
+      padding-right: 12px;
+      line-height: 2;
+      font-weight: 500;
+      border: 1.5px solid rgba(91,91,91,0.1);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .activeTag    { background-color: #84ca8130; border: 1.5px solid rgba(70,227,114,0.2); }
+    .outOfStockTag { background-color: rgba(255,0,0,0.05); color: rgb(234,83,83); border: 1.5px solid rgba(255,0,0,0.3); }
+    .pausedTag    { background-color: #caab7036; }
+    .circle       { width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; margin-left: 6px; }
+    .activeCircle    { background-color: #6d9b7e; }
+    .outOfStockCircle { background-color: #ea5353; }
+    .pausedCircle    { background-color: #a06d37; }
+
+    /* Stock */
+    .stock { display: flex; gap: 4px; align-items: center; }
+    .stockText, .variantsText { opacity: 0.7; }
+
+    /* Buttons */
+    .buttonCell { display: flex; gap: 8px; flex-direction: row-reverse; align-items: center; }
+    .buttonCell button {
+      appearance: none;
+      display: inline-block;
+      padding: 0.375em 1em 0.5em;
+      white-space: nowrap;
+      border-radius: 6px;
+      box-shadow: 0 0 0 4px transparent, 0 1px 2px 0 #0c111d11;
+      outline: none;
+      background-color: var(--ag-background-color, #fff);
+      color: #101828;
+      border: 1px solid var(--ag-border-color, #ddd);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .removeButton {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 40px;
+      width: 40px;
+      padding: 0;
+      font-size: 16px;
+    }
+    .buttonStopSelling { display: flex; align-items: center; justify-content: center; height: 40px; }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ── AG Grid - CDN bundle exposes everything on window.agGrid
+//    and auto-registers all Community + Enterprise modules ──────────────────
+const { createGrid } = agGrid;
+
+// ── Data ─────────────────────────────────────────────────────────────────────
+function getData() {
+  return [
+    {
+      product: "Dreams of You", artist: "David Nearing", category: "Soft Rock",
+      year: "1978", status: "active", available: 8, incoming: 20,
+      image: "dreamsofyou.webp", price: 32, sold: 18, priceIncrease: 5, variants: 2,
+      variantDetails: [
+        { title: "Dreams of You", available: 5, format: "LP, Album, Reissue", label: "Amberline Records", cat: "ARL1978-01", country: "Worldwide", year: "2024" },
+        { title: "Dreams of You", available: 3, format: "CD, Album, Remastered", label: "Amberline Records", cat: "ARCD-78X", country: "Europe", year: "2024" },
+      ],
+    },
+    {
+      product: "Blue Skies", artist: "Maya Allen", category: "Pop",
+      year: "2022", status: "outOfStock", available: 0, incoming: 0,
+      image: "blueskies.webp", price: 25, sold: 12, priceIncrease: 10, variants: 1,
+      variantDetails: [
+        { title: "Blue Skies", available: 0, format: "LP, Album, Limited Edition, Pink", label: "Celestia Records", cat: "CR5050-P", country: "US", year: "2023" },
+      ],
+    },
+    {
+      product: "Heaven", artist: "Velvet Wave", category: "Synth-pop",
+      year: "1989", status: "active", available: 10, incoming: 5,
+      image: "heaven.webp", price: 20, sold: 5, priceIncrease: 10, variants: 2,
+      variantDetails: [
+        { title: "Heaven", available: 4, format: "CD, Album, Stereo", label: "NovaCore", cat: "NC-1989-CD", country: "USA", year: "2023" },
+        { title: "Heaven", available: 6, format: "LP, Album, Reissue, 180 Gram", label: "NovaCore", cat: "NC-1989-LP", country: "Europe", year: "2024" },
+      ],
+    },
+    {
+      product: "Life Matters", artist: "Danielle James", category: "Rhythm & Blues",
+      year: "2007", status: "paused", available: 4, incoming: 15,
+      image: "lifematters.webp", price: 28, sold: 9, priceIncrease: 5, variants: 2,
+      variantDetails: [
+        { title: "Life Matters", available: 2, format: "LP, Album, Deluxe Edition", label: "Harmony Soul", cat: "HSR2007DLX", country: "Worldwide", year: "2023" },
+        { title: "Life Matters", available: 2, format: "CD, Album", label: "Harmony Soul", cat: "HSR2007CD", country: "Europe", year: "2023" },
+      ],
+    },
+    {
+      product: "Lonely Hearts", artist: "Emma Stone", category: "Alt-pop",
+      year: "2023", status: "active", available: 14, incoming: 24,
+      image: "lonelyhearts.webp", price: 34, sold: 17, priceIncrease: 12, variants: 1,
+      variantDetails: [
+        { title: "Lonely Hearts", available: 5, format: "2×LP, Album, Limited Edition", label: "Veridian Sounds", cat: "VS-2023-HEART", country: "Worldwide", year: "2023" },
+      ],
+    },
+    {
+      product: "Imaginary Groove", artist: "Leo Collins", category: "Jazz",
+      year: "1972", status: "active", available: 6, incoming: 10,
+      image: "imaginarygroove.webp", price: 30, sold: 8, priceIncrease: 8, variants: 2,
+      variantDetails: [
+        { title: "Imaginary Groove", available: 3, format: "LP, Album, Stereo", label: "Kindred Audio", cat: "KA-72-IG-LP", country: "Europe", year: "2023" },
+        { title: "Imaginary Groove", available: 3, format: "CD, Album", label: "Kindred Audio", cat: "KA-72-IG-CD", country: "US", year: "2023" },
+      ],
+    },
+    {
+      product: "Desert Bloom", artist: "Indigo Ray", category: "Electronic",
+      year: "2021", status: "paused", available: 3, incoming: 7,
+      image: "desertbloom.webp", price: 27, sold: 11, priceIncrease: 6, variants: 1,
+      variantDetails: [
+        { title: "Desert Bloom", available: 3, format: "LP, Album", label: "Neon Pulse", cat: "NP-DB-21", country: "Worldwide", year: "2023" },
+      ],
+    },
+    {
+      product: "Golden Daze", artist: "The Marlowe Sound", category: "Rock",
+      year: "1985", status: "active", available: 10, incoming: 12,
+      image: "goldendaze.webp", price: 31, sold: 15, priceIncrease: 7, variants: 2,
+      variantDetails: [
+        { title: "Golden Daze", available: 6, format: "LP, Album, Reissue", label: "Copperline Records", cat: "CRD-GL85", country: "USA", year: "2024" },
+        { title: "Golden Daze", available: 4, format: "CD, Album, Remastered", label: "Copperline Records", cat: "CRD-GL85-CD", country: "Europe", year: "2024" },
+      ],
+    },
+    {
+      product: "Fragments", artist: "Nova Elle", category: "Trance",
+      year: "2020", status: "active", available: 5, incoming: 9,
+      image: "fragments.webp", price: 29, sold: 6, priceIncrease: 4, variants: 1,
+      variantDetails: [
+        { title: "Fragments", available: 5, format: "LP, Album, Limited Edition, Glow", label: "Hyperstream", cat: "HS-FRAG2020", country: "Worldwide", year: "2023" },
+      ],
+    },
+    {
+      product: "Solstice City", artist: "Aurora Lines", category: "Ambient",
+      year: "2022", status: "outOfStock", available: 0, incoming: 0,
+      image: "solsticecity.webp", price: 26, sold: 9, priceIncrease: 0, variants: 1,
+      variantDetails: [
+        { title: "Solstice City", available: 0, format: "LP, Album, Transparent Blue", label: "Lunar Echo", cat: "LE-SOL22", country: "Europe", year: "2023" },
+      ],
+    },
+  ];
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const statuses = {
+  all: "All",
+  active: "Active",
+  paused: "On Hold",
+  outOfStock: "Out of Stock",
+};
+
+function statusFormatter({ value }) {
+  return statuses[value] ?? "";
+}
+
+function actionsCellRenderer(params) {
+  const api = params.api;
+  const node = params.node;
+
+  const container = document.createElement("div");
+  container.className = "buttonCell";
+
+  // Remove button
+  const removeButton = document.createElement("button");
+  removeButton.className = "removeButton";
+  removeButton.title = "Delete";
+  removeButton.textContent = "🗑";
+  removeButton.addEventListener("click", () => {
+    if (node?.data) api.applyTransaction({ remove: [node.data] });
+  });
+
+  // Hold/resume button
+  const stopButton = document.createElement("button");
+  stopButton.className = "buttonStopSelling";
+  stopButton.textContent = "Hold Selling";
+  stopButton.addEventListener("click", () => {
+    if (!node?.data) return;
+    const rowData = node.data;
+    const isPaused = rowData.status === "paused";
+    const isOutOfStock = rowData.available <= 0;
+    rowData.status = !isPaused ? "paused" : !isOutOfStock ? "active" : "outOfStock";
+    api.applyTransaction({ update: [rowData] });
+  });
+
+  container.append(removeButton, stopButton);
+  return container;
+}
+
+function priceCellRenderer(params) {
+  const container = document.createElement("div");
+  container.className = "price";
+
+  const price = document.createElement("span");
+  price.className = "priceAmount";
+  price.textContent = `£${params.value ?? ""}`;
+
+  const increase = document.createElement("span");
+  increase.className = "increase";
+  increase.textContent = `${params.data?.priceIncrease ?? ""}% increase`;
+
+  container.append(price, increase);
+  return container;
+}
+
+function productCellRenderer(params) {
+  const container = document.createElement("div");
+  container.className = "productCell";
+
+  const imageWrapper = document.createElement("div");
+  imageWrapper.className = "image";
+  const img = document.createElement("img");
+  // Use a placeholder since the actual image assets aren't available
+  img.src = `https://placehold.co/60x60/e8eaf0/6b7585?text=${encodeURIComponent((params.value || "?")[0])}`;
+  img.alt = params.data?.image ?? "";
+  imageWrapper.append(img);
+
+  const textWrapper = document.createElement("div");
+  const title = document.createElement("div");
+  title.textContent = params.value ?? "";
+  const category = document.createElement("div");
+  category.className = "stockCell";
+  category.textContent = params.data?.category ?? "";
+  textWrapper.append(title, category);
+
+  container.append(imageWrapper, textWrapper);
+  return container;
+}
+
+function statusCellRenderer(params) {
+  const value = params.value ?? "";
+  const container = document.createElement("div");
+  container.className = `tag ${value}Tag`.trim();
+
+  const circle = document.createElement("div");
+  circle.className = `circle ${value}Circle`.trim();
+  const label = document.createElement("span");
+  label.textContent = params.valueFormatted ?? value;
+
+  container.append(circle, label);
+  return container;
+}
+
+function stockCellRenderer(params) {
+  const container = document.createElement("div");
+  container.className = "stock";
+
+  const available = document.createElement("span");
+  available.textContent = String(params.data?.available ?? 0);
+
+  const stockText = document.createElement("span");
+  stockText.className = "stockText";
+  stockText.textContent = "Stock /";
+
+  const variantsText = document.createElement("span");
+  variantsText.className = "variantsText";
+  variantsText.textContent = `${params.data?.variants ?? 0} Variants`;
+
+  container.append(available, stockText, variantsText);
+  return container;
+}
+
+// ── Build DOM ─────────────────────────────────────────────────────────────────
+const app = document.getElementById("app");
+
+const wrapper = document.createElement("div");
+wrapper.className = "wrapper";
+const container = document.createElement("div");
+container.className = "container";
+wrapper.append(container);
+app.append(wrapper);
+
+// Header
+const header = document.createElement("div");
+header.className = "exampleHeader";
+container.append(header);
+
+// Tabs
+const tabs = document.createElement("div");
+tabs.className = "tabs";
+header.append(tabs);
+
+let activeTab = "all";
+let gridApi = null;
+
+function updateActiveTab(tab) {
+  activeTab = tab;
+  tabs.querySelectorAll("button").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.status === activeTab);
+  });
+}
+
+Object.entries(statuses).forEach(([key, label]) => {
+  const button = document.createElement("button");
+  button.className = "tabButton";
+  button.textContent = label;
+  button.dataset.status = key;
+  button.addEventListener("click", () => {
+    updateActiveTab(key);
+    if (!gridApi) return;
+    gridApi
+      .setColumnFilterModel("status", key === "all" ? null : { values: [key] })
+      .then(() => gridApi.onFilterChanged());
+  });
+  tabs.append(button);
+});
+updateActiveTab("all");
+
+// Search
+const inputWrapper = document.createElement("div");
+inputWrapper.className = "inputWrapper";
+inputWrapper.innerHTML = `
+  <svg class="searchIcon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M11.5014 7.00039C11.5014 7.59133 11.385 8.1765 11.1588 8.72246C10.9327 9.26843 10.6012 9.7645 10.1833 10.1824C9.76548 10.6002 9.2694 10.9317 8.72344 11.1578C8.17747 11.384 7.59231 11.5004 7.00136 11.5004C6.41041 11.5004 5.82525 11.384 5.27929 11.1578C4.73332 10.9317 4.23725 10.6002 3.81938 10.1824C3.40152 9.7645 3.07005 9.26843 2.8439 8.72246C2.61776 8.1765 2.50136 7.59133 2.50136 7.00039C2.50136 5.80691 2.97547 4.66232 3.81938 3.81841C4.6633 2.97449 5.80789 2.50039 7.00136 2.50039C8.19484 2.50039 9.33943 2.97449 10.1833 3.81841C11.0273 4.66232 11.5014 5.80691 11.5014 7.00039ZM10.6814 11.7404C9.47574 12.6764 7.95873 13.1177 6.43916 12.9745C4.91959 12.8314 3.51171 12.1145 2.50211 10.9698C1.49252 9.8251 0.957113 8.33868 1.0049 6.81314C1.05268 5.28759 1.68006 3.83759 2.75932 2.75834C3.83857 1.67908 5.28856 1.0517 6.81411 1.00392C8.33966 0.956136 9.82608 1.49154 10.9708 2.50114C12.1154 3.51073 12.8323 4.91862 12.9755 6.43819C13.1187 7.95775 12.6773 9.47476 11.7414 10.6804L14.5314 13.4704C14.605 13.539 14.6642 13.6218 14.7051 13.7138C14.7461 13.8058 14.7682 13.9052 14.77 14.0059C14.7717 14.1066 14.7532 14.2066 14.7155 14.3C14.6778 14.3934 14.6216 14.4782 14.5504 14.5494C14.4792 14.6206 14.3943 14.6768 14.301 14.7145C14.2076 14.7522 14.1075 14.7708 14.0068 14.769C13.9061 14.7672 13.8068 14.7452 13.7148 14.7042C13.6228 14.6632 13.54 14.6041 13.4714 14.5304L10.6814 11.7404Z" fill="currentColor"/>
+  </svg>
+`;
+const searchInput = document.createElement("input");
+searchInput.type = "text";
+searchInput.id = "filter-text-box";
+searchInput.placeholder = "Search product...";
+inputWrapper.append(searchInput);
+header.append(inputWrapper);
+
+// Grid
+const gridWrapper = document.createElement("div");
+gridWrapper.className = "grid ag-theme-quartz";
+container.append(gridWrapper);
+
+// ── Column Definitions ────────────────────────────────────────────────────────
+const colDefs = [
+  {
+    field: "product",
+    headerName: "Album Name",
+    cellRenderer: "agGroupCellRenderer",
+    headerClass: "header-product",
+    cellRendererParams: { innerRenderer: productCellRenderer },
+    minWidth: 300,
+  },
+  { field: "artist" },
+  { field: "year", width: 150, headerClass: "header-sku" },
+  {
+    field: "status",
+    valueFormatter: statusFormatter,
+    cellRenderer: statusCellRenderer,
+    minWidth: 140,
+    filter: true,
+    filterParams: { valueFormatter: statusFormatter },
+    headerClass: "header-status",
+  },
+  {
+    field: "inventory",
+    cellRenderer: stockCellRenderer,
+    headerClass: "header-inventory",
+    sortable: false,
+  },
+  {
+    field: "incoming",
+    editable: true,
+    cellEditorParams: { precision: 0, step: 1, showStepperButtons: true },
+  },
+  {
+    field: "price",
+    width: 120,
+    headerClass: "header-price",
+    cellRenderer: priceCellRenderer,
+  },
+  { field: "sold", headerClass: "header-calendar" },
+  {
+    headerName: "Est. Profit",
+    colId: "profit",
+    headerClass: "header-percentage",
+    cellDataType: "number",
+    valueGetter: ({ data }) => (data.price * data.sold) / 10,
+    valueFormatter: ({ value }) => `£${value}`,
+    width: 150,
+  },
+  { field: "actions", cellRenderer: actionsCellRenderer, minWidth: 194 },
+];
+
+// ── Create Grid ───────────────────────────────────────────────────────────────
+gridApi = createGrid(gridWrapper, {
+  columnDefs: colDefs,
+  rowData: getData(),
+  rowHeight: 80,
+  defaultColDef: { resizable: false },
+  autoSizeStrategy: { type: "fitCellContents" },
+  pagination: true,
+  paginationPageSize: 10,
+  paginationPageSizeSelector: [5, 10, 20],
+  masterDetail: true,
+  detailRowAutoHeight: true,
+  detailCellRendererParams: {
+    detailGridOptions: {
+      columnDefs: [
+        { field: "title", flex: 1.5 },
+        { field: "available", maxWidth: 120 },
+        { field: "format", flex: 2 },
+        { field: "label", flex: 1 },
+        { field: "country", flex: 0.66 },
+        { field: "cat", headerName: "Cat#", type: "rightAligned", flex: 0.66 },
+        { field: "year", type: "rightAligned", maxWidth: 80 },
+      ],
+      headerHeight: 38,
+    },
+    getDetailRowData: ({ successCallback, data }) => {
+      successCallback(data.variantDetails);
+    },
+  },
+});
+
+// Quick filter
+searchInput.addEventListener("input", () => {
+  gridApi.setGridOption("quickFilterText", searchInput.value);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,2276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BIM Section Box Viewer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-dark: #1a1d23;
+    --bg-panel: #22262e;
+    --bg-panel-hover: #2a2f38;
+    --bg-item: #282c35;
+    --border: #333840;
+    --text-primary: #e8eaed;
+    --text-secondary: #9aa0a8;
+    --text-dim: #666b73;
+    --accent: #4fc3f7;
+    --accent-dim: rgba(79, 195, 247, 0.15);
+    --accent-glow: rgba(79, 195, 247, 0.3);
+    --select-color: #ffb74d;
+    --select-dim: rgba(255, 183, 77, 0.15);
+    --measure-color: #81c784;
+    --x-color: #e57373;
+    --y-color: #81c784;
+    --z-color: #4fc3f7;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh; width: 100vw;
+  }
+
+  #canvas-container { width: 100%; height: 100%; position: relative; }
+  canvas { display: block; }
+
+  /* ---- Left Toolbar ---- */
+  .toolbar {
+    position: absolute; top: 16px; left: 16px;
+    display: flex; flex-direction: column; gap: 0;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 6px; z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    width: 46px;
+  }
+
+  .toolbar .tool-group {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 5px 0;
+  }
+
+  .toolbar .tool-group:not(:last-child) { border-bottom: 1px solid var(--border); }
+
+  .toolbar .group-label {
+    font-size: 7.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.6px; color: var(--text-dim);
+    text-align: center; padding: 1px 2px 3px; pointer-events: none;
+    line-height: 1;
+  }
+
+  .toolbar button {
+    background: transparent; border: none; color: var(--text-secondary);
+    width: 34px; height: 32px; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s ease; position: relative; margin: 0 auto;
+  }
+
+  .toolbar button:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
+  .toolbar button.active { background: var(--accent-dim); color: var(--accent); }
+  .toolbar button svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+  .toolbar button::after {
+    content: attr(data-tip);
+    position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+    background: var(--bg-panel); border: 1px solid var(--border);
+    color: var(--text-primary); padding: 4px 10px; border-radius: 6px;
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
+    white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 0.15s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 200;
+  }
+
+  .toolbar button:hover::after { opacity: 1; }
+
+  .toolbar button.sub-btn { width: 28px; height: 26px; }
+  .toolbar button.sub-btn svg { width: 14px; height: 14px; }
+
+  /* ---- Flyout Panels ---- */
+  .flyout-panel {
+    position: absolute; top: 16px; left: 74px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px; z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); display: none;
+  }
+
+  .flyout-panel.visible { display: block; }
+
+  .flyout-panel .panel-title {
+    font-weight: 600; font-size: 12px; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 7px;
+    color: var(--text-primary);
+  }
+
+  .flyout-panel .panel-title svg { width: 14px; height: 14px; color: var(--accent); }
+
+  /* ---- Section Panel ---- */
+  #section-panel { width: 230px; }
+
+  .axis-group { margin-bottom: 8px; }
+
+  .axis-label {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 5px;
+  }
+
+  .axis-label .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .axis-label.x-axis .dot { background: var(--x-color); }
+  .axis-label.y-axis .dot { background: var(--y-color); }
+  .axis-label.z-axis .dot { background: var(--z-color); }
+
+  .slider-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+
+  .slider-row span {
+    font-size: 10px; color: var(--text-secondary); width: 26px; flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .slider-row span:first-child { text-align: right; }
+
+  input[type="range"] {
+    flex: 1; -webkit-appearance: none; height: 3px;
+    background: var(--bg-dark); border-radius: 2px; outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+    border: 2px solid var(--bg-panel); box-shadow: 0 0 6px var(--accent-glow);
+  }
+
+  .reset-btn {
+    width: 100%; margin-top: 6px; padding: 6px;
+    background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-secondary); font-family: 'DM Sans', sans-serif;
+    font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s ease;
+  }
+
+  .reset-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- Layer Panel ---- */
+  #layer-panel { width: 260px; max-height: 70vh; display: none; flex-direction: column; }
+  #layer-panel.visible { display: flex; }
+
+  .layer-mode-toggle {
+    display: flex; gap: 2px; margin-bottom: 8px;
+    background: var(--bg-dark); border-radius: 6px; padding: 2px;
+  }
+
+  .layer-mode-toggle button {
+    flex: 1; padding: 4px 8px; background: transparent;
+    border: none; border-radius: 4px; color: var(--text-secondary);
+    font-family: 'DM Sans', sans-serif; font-size: 10px; font-weight: 500;
+    cursor: pointer; transition: all 0.15s;
+  }
+
+  .layer-mode-toggle button.active {
+    background: var(--accent-dim); color: var(--accent);
+  }
+
+  #layer-list {
+    flex: 1; overflow-y: auto; margin-top: 4px;
+    max-height: calc(70vh - 110px);
+  }
+
+  #layer-list::-webkit-scrollbar { width: 4px; }
+  #layer-list::-webkit-scrollbar-track { background: transparent; }
+  #layer-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .layer-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    transition: background 0.1s ease; font-size: 12px;
+    margin-bottom: 1px;
+  }
+
+  .layer-item:hover { background: var(--bg-panel-hover); }
+  .layer-item.selected { background: var(--select-dim); }
+
+  .layer-swatch {
+    width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+  }
+
+  .layer-name {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-primary); font-size: 11px;
+  }
+
+  .layer-count {
+    font-size: 9px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace;
+    flex-shrink: 0;
+  }
+
+  .layer-name.hidden-layer { color: var(--text-dim); text-decoration: line-through; }
+
+  .layer-vis {
+    background: none; border: none; color: var(--text-secondary);
+    cursor: pointer; padding: 2px; display: flex; align-items: center;
+    border-radius: 4px; transition: all 0.1s;
+  }
+
+  .layer-vis:hover { color: var(--text-primary); background: var(--bg-dark); }
+  .layer-vis.off { color: var(--text-dim); }
+  .layer-vis svg { width: 14px; height: 14px; }
+
+  .layer-actions {
+    display: flex; gap: 4px; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px;
+  }
+
+  .layer-actions button {
+    flex: 1; padding: 5px; background: var(--bg-dark); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text-secondary); font-family: 'DM Sans', sans-serif;
+    font-size: 10px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  }
+
+  .layer-actions button:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- Measure Panel ---- */
+  #measure-panel { width: 200px; }
+
+  .measure-result {
+    background: var(--bg-dark); border-radius: 6px; padding: 10px;
+    margin-top: 6px; text-align: center;
+  }
+
+  .measure-result .value {
+    font-family: 'JetBrains Mono', monospace; font-size: 18px;
+    font-weight: 600; color: var(--measure-color);
+  }
+
+  .measure-result .unit { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+  .measure-hint {
+    font-size: 11px; color: var(--text-secondary); line-height: 1.5;
+  }
+
+  .measure-hint strong { color: var(--text-primary); }
+
+  /* ---- Selection Info ---- */
+  #selection-info {
+    position: absolute; bottom: 16px; left: 74px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; z-index: 100;
+    font-size: 11px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    display: none; max-width: 280px;
+  }
+
+  #selection-info.visible { display: block; }
+
+  #selection-info .sel-title {
+    font-weight: 600; font-size: 12px; color: var(--select-color); margin-bottom: 4px;
+  }
+
+  #selection-info .sel-detail {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--text-secondary); line-height: 1.6;
+  }
+
+  /* ---- Bottom Panels ---- */
+  .info-panel {
+    position: absolute; bottom: 16px; left: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px; z-index: 100;
+    font-size: 11px; color: var(--text-secondary); line-height: 1.6;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4); max-width: 280px;
+  }
+
+  .info-panel kbd {
+    background: var(--bg-dark); border: 1px solid var(--border); border-radius: 3px;
+    padding: 1px 5px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent);
+  }
+
+  .pivot-indicator {
+    position: absolute; bottom: 16px; right: 16px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 12px; z-index: 100;
+    font-size: 10px; font-family: 'JetBrains Mono', monospace;
+    color: var(--text-secondary); box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .pivot-indicator .label {
+    font-family: 'DM Sans', sans-serif; font-weight: 600; font-size: 10px;
+    color: var(--text-dim); margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  #axes-container {
+    position: absolute; bottom: 60px; right: 16px;
+    width: 90px; height: 90px; z-index: 100; pointer-events: none;
+  }
+
+  .loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg-dark); z-index: 1000; transition: opacity 0.5s ease;
+    flex-direction: column; gap: 12px;
+  }
+
+  .loading.hidden { opacity: 0; pointer-events: none; }
+  .loading-text { font-size: 14px; color: var(--text-secondary); animation: pulse 1.5s ease-in-out infinite; }
+
+  .drop-zone {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 40px;
+    text-align: center; cursor: pointer; transition: all 0.2s;
+    max-width: 400px;
+  }
+
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--accent); background: var(--accent-dim);
+  }
+
+  .drop-zone .drop-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
+  .drop-zone .drop-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+  .drop-zone .drop-sub { font-size: 12px; color: var(--text-secondary); }
+  .drop-zone .drop-or { font-size: 11px; color: var(--text-dim); margin: 12px 0; }
+
+  .drop-zone .demo-btn {
+    background: var(--accent-dim); border: 1px solid var(--accent);
+    color: var(--accent); padding: 8px 20px; border-radius: 6px;
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+
+  .drop-zone .demo-btn:hover { background: var(--accent); color: var(--bg-dark); }
+
+  @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+  <div class="loading" id="loading">
+    <div class="drop-zone" id="drop-zone">
+      <div class="drop-icon">📐</div>
+      <div class="drop-title">Drop a model file here</div>
+      <div class="drop-sub">Supports .glb, .gltf</div>
+      <div class="drop-or">— or —</div>
+      <button class="demo-btn" id="btn-load-demo">Load Demo Building</button>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar" id="main-toolbar" style="display:none;">
+    <div class="tool-group">
+      <div class="group-label">Mode</div>
+      <button id="btn-orbit" class="active" data-tip="Orbit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3c4 4 4 14 0 18"/><path d="M3 12h18"/></svg>
+      </button>
+      <button id="btn-select" data-tip="Select">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>
+      </button>
+      <button id="btn-set-pivot" data-tip="Set Pivot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="10" stroke-dasharray="2 3"/></svg>
+      </button>
+      <button id="btn-measure" data-tip="Measure">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.4 2.4 0 0 1 0-3.4l2.6-2.6a2.4 2.4 0 0 1 3.4 0zM14.5 12.5l-8-8"/><path d="M7.5 5.5l2 2M9.5 3.5l2 2M11.5 7.5l2 2"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">Transform</div>
+      <button id="btn-rotate-model" data-tip="Rotate Model">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"/><path d="M21 8A9 9 0 0 0 6.34 6.34"/><path d="M3 22v-6h6"/><path d="M3 16a9 9 0 0 0 14.66 1.66"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">Clip</div>
+      <button id="btn-section" data-tip="Section Box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+      </button>
+      <button id="btn-section-panel" class="sub-btn" data-tip="Adjust" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">View</div>
+      <button id="btn-extents" data-tip="Extents">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+      </button>
+      <button id="btn-reset-pivot" data-tip="Center Pivot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+      </button>
+      <button id="btn-layers" data-tip="Layers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </button>
+    </div>
+
+    <div class="tool-group">
+      <div class="group-label">Style</div>
+      <button id="btn-wireframe" data-tip="Wireframe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+      </button>
+      <button id="btn-ghost" data-tip="X-Ray">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="4"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Section Panel -->
+  <div class="flyout-panel" id="section-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/></svg>
+      Section Box
+    </div>
+    <div class="axis-group">
+      <div class="axis-label x-axis"><span class="dot"></span>X Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="x-min" min="0" max="100" value="0"><span id="x-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="x-max" min="0" max="100" value="100"><span id="x-max-val">100</span></div>
+    </div>
+    <div class="axis-group">
+      <div class="axis-label y-axis"><span class="dot"></span>Y Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="y-min" min="0" max="100" value="0"><span id="y-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="y-max" min="0" max="100" value="100"><span id="y-max-val">100</span></div>
+    </div>
+    <div class="axis-group">
+      <div class="axis-label z-axis"><span class="dot"></span>Z Axis</div>
+      <div class="slider-row"><span>Min</span><input type="range" id="z-min" min="0" max="100" value="0"><span id="z-min-val">0</span></div>
+      <div class="slider-row"><span>Max</span><input type="range" id="z-max" min="0" max="100" value="100"><span id="z-max-val">100</span></div>
+    </div>
+    <button class="reset-btn" id="btn-reset-section">Reset Section Box</button>
+  </div>
+
+  <!-- Layer Panel -->
+  <div class="flyout-panel" id="layer-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Layers
+    </div>
+    <div class="layer-mode-toggle">
+      <button id="btn-group-node" class="active">By Node</button>
+      <button id="btn-group-material">By Material</button>
+      <button id="btn-group-mesh">By Mesh</button>
+    </div>
+    <div id="layer-list"></div>
+    <div class="layer-actions">
+      <button id="btn-show-all">Show All</button>
+      <button id="btn-hide-all">Hide All</button>
+      <button id="btn-isolate-sel">Isolate</button>
+    </div>
+  </div>
+
+  <!-- Measure Panel -->
+  <div class="flyout-panel" id="measure-panel">
+    <div class="panel-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.4 2.4 0 0 1 0-3.4l2.6-2.6a2.4 2.4 0 0 1 3.4 0z"/></svg>
+      Measure
+    </div>
+    <div class="measure-hint" id="measure-hint">
+      Click <strong>two points</strong> on the model to measure the distance between them.
+    </div>
+    <div class="measure-result" id="measure-result" style="display:none;">
+      <div class="value" id="measure-value">0.00</div>
+      <div class="unit">units</div>
+    </div>
+    <button class="reset-btn" id="btn-clear-measure" style="margin-top:8px;">Clear Measurement</button>
+  </div>
+
+  <!-- Selection Info -->
+  <div id="selection-info">
+    <div class="sel-title" id="sel-name">—</div>
+    <div class="sel-detail" id="sel-detail"></div>
+  </div>
+
+  <!-- Bottom panels -->
+  <div class="info-panel" id="info-panel" style="display:none;">
+    <kbd>LMB</kbd> Orbit &nbsp; <kbd>RMB</kbd> Pan &nbsp; <kbd>Scroll</kbd> Zoom
+  </div>
+
+  <div class="pivot-indicator" id="pivot-indicator" style="display:none;">
+    <div class="label">Pivot</div>
+    <div id="pivot-coords">0.00, 0.00, 0.00</div>
+  </div>
+
+  <div id="axes-container"></div>
+</div>
+
+<!-- Three.js r128 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<!-- OrbitControls for r128 -->
+<script>
+/**
+ * Inline OrbitControls (from Three.js r128 examples) - minified essential version
+ * We inline this because we can't import from examples in a CDN-only setup
+ */
+(function() {
+  const _changeEvent = { type: 'change' };
+  const _startEvent = { type: 'start' };
+  const _endEvent = { type: 'end' };
+  const STATE = { NONE: -1, ROTATE: 0, DOLLY: 1, PAN: 2, TOUCH_ROTATE: 3, TOUCH_PAN: 4, TOUCH_DOLLY_PAN: 5, TOUCH_DOLLY_ROTATE: 6 };
+  const EPS = 0.000001;
+  const twoPI = 2 * Math.PI;
+
+  class OrbitControls extends THREE.EventDispatcher {
+    constructor(object, domElement) {
+      super();
+      this.object = object;
+      this.domElement = domElement;
+      this.enabled = true;
+      this.target = new THREE.Vector3();
+      this.minDistance = 0;
+      this.maxDistance = Infinity;
+      this.minZoom = 0;
+      this.maxZoom = Infinity;
+      this.minPolarAngle = 0;
+      this.maxPolarAngle = Math.PI;
+      this.minAzimuthAngle = -Infinity;
+      this.maxAzimuthAngle = Infinity;
+      this.enableDamping = true;
+      this.dampingFactor = 0.08;
+      this.enableZoom = true;
+      this.zoomSpeed = 1.0;
+      this.enableRotate = true;
+      this.rotateSpeed = 0.8;
+      this.enablePan = true;
+      this.panSpeed = 1.0;
+      this.screenSpacePanning = true;
+      this.keyPanSpeed = 7.0;
+      this.autoRotate = false;
+      this.autoRotateSpeed = 2.0;
+      this.enableKeys = false;
+
+      this.target0 = this.target.clone();
+      this.position0 = this.object.position.clone();
+      this.zoom0 = this.object.zoom;
+
+      this._state = STATE.NONE;
+      this._spherical = new THREE.Spherical();
+      this._sphericalDelta = new THREE.Spherical();
+      this._scale = 1;
+      this._panOffset = new THREE.Vector3();
+      this._zoomChanged = false;
+      this._rotateStart = new THREE.Vector2();
+      this._rotateEnd = new THREE.Vector2();
+      this._rotateDelta = new THREE.Vector2();
+      this._panStart = new THREE.Vector2();
+      this._panEnd = new THREE.Vector2();
+      this._panDelta = new THREE.Vector2();
+      this._dollyStart = new THREE.Vector2();
+      this._dollyEnd = new THREE.Vector2();
+      this._dollyDelta = new THREE.Vector2();
+
+      this._quat = new THREE.Quaternion().setFromUnitVectors(object.up, new THREE.Vector3(0, 1, 0));
+      this._quatInverse = this._quat.clone().invert();
+      this._lastPosition = new THREE.Vector3();
+      this._lastQuaternion = new THREE.Quaternion();
+      this._offset = new THREE.Vector3();
+      this._v = new THREE.Vector3();
+
+      this.domElement.addEventListener('contextmenu', e => e.preventDefault());
+      this.domElement.addEventListener('pointerdown', e => this._onPointerDown(e));
+      this.domElement.addEventListener('wheel', e => this._onMouseWheel(e), { passive: false });
+    }
+
+    getPolarAngle() { return this._spherical.phi; }
+    getAzimuthalAngle() { return this._spherical.theta; }
+
+    update() {
+      const position = this.object.position;
+      this._offset.copy(position).sub(this.target);
+      this._offset.applyQuaternion(this._quat);
+      this._spherical.setFromVector3(this._offset);
+
+      if (this.autoRotate && this._state === STATE.NONE) {
+        this._sphericalDelta.theta -= 2 * Math.PI / 60 / 60 * this.autoRotateSpeed;
+      }
+
+      if (this.enableDamping) {
+        this._spherical.theta += this._sphericalDelta.theta * this.dampingFactor;
+        this._spherical.phi += this._sphericalDelta.phi * this.dampingFactor;
+      } else {
+        this._spherical.theta += this._sphericalDelta.theta;
+        this._spherical.phi += this._sphericalDelta.phi;
+      }
+
+      let min = this.minAzimuthAngle, max = this.maxAzimuthAngle;
+      if (isFinite(min) && isFinite(max)) {
+        if (min < -Math.PI) min += twoPI; else if (min > Math.PI) min -= twoPI;
+        if (max < -Math.PI) max += twoPI; else if (max > Math.PI) max -= twoPI;
+        if (min <= max) {
+          this._spherical.theta = Math.max(min, Math.min(max, this._spherical.theta));
+        } else {
+          this._spherical.theta = (this._spherical.theta > (min + max) / 2) ?
+            Math.max(min, this._spherical.theta) : Math.min(max, this._spherical.theta);
+        }
+      }
+
+      this._spherical.phi = Math.max(this.minPolarAngle, Math.min(this.maxPolarAngle, this._spherical.phi));
+      this._spherical.makeSafe();
+      this._spherical.radius *= this._scale;
+      this._spherical.radius = Math.max(this.minDistance, Math.min(this.maxDistance, this._spherical.radius));
+
+      if (this.enableDamping) {
+        this.target.addScaledVector(this._panOffset, this.dampingFactor);
+      } else {
+        this.target.add(this._panOffset);
+      }
+
+      this._offset.setFromSpherical(this._spherical);
+      this._offset.applyQuaternion(this._quatInverse);
+      position.copy(this.target).add(this._offset);
+      this.object.lookAt(this.target);
+
+      if (this.enableDamping) {
+        this._sphericalDelta.theta *= (1 - this.dampingFactor);
+        this._sphericalDelta.phi *= (1 - this.dampingFactor);
+        this._panOffset.multiplyScalar(1 - this.dampingFactor);
+      } else {
+        this._sphericalDelta.set(0, 0, 0);
+        this._panOffset.set(0, 0, 0);
+      }
+
+      this._scale = 1;
+
+      if (this._zoomChanged ||
+        this._lastPosition.distanceToSquared(this.object.position) > EPS ||
+        8 * (1 - this._lastQuaternion.dot(this.object.quaternion)) > EPS) {
+        this.dispatchEvent(_changeEvent);
+        this._lastPosition.copy(this.object.position);
+        this._lastQuaternion.copy(this.object.quaternion);
+        this._zoomChanged = false;
+        return true;
+      }
+      return false;
+    }
+
+    dispose() {
+      this.domElement.removeEventListener('contextmenu', e => e.preventDefault());
+      this.domElement.removeEventListener('pointerdown', this._onPointerDown);
+      this.domElement.removeEventListener('wheel', this._onMouseWheel);
+    }
+
+    _panLeft(distance, objectMatrix) {
+      this._v.setFromMatrixColumn(objectMatrix, 0);
+      this._v.multiplyScalar(-distance);
+      this._panOffset.add(this._v);
+    }
+
+    _panUp(distance, objectMatrix) {
+      if (this.screenSpacePanning) {
+        this._v.setFromMatrixColumn(objectMatrix, 1);
+      } else {
+        this._v.setFromMatrixColumn(objectMatrix, 0);
+        this._v.crossVectors(this.object.up, this._v);
+      }
+      this._v.multiplyScalar(distance);
+      this._panOffset.add(this._v);
+    }
+
+    _pan(deltaX, deltaY) {
+      const element = this.domElement;
+      if (this.object.isPerspectiveCamera) {
+        const position = this.object.position;
+        this._offset.copy(position).sub(this.target);
+        let targetDistance = this._offset.length();
+        targetDistance *= Math.tan((this.object.fov / 2) * Math.PI / 180.0);
+        this._panLeft(2 * deltaX * targetDistance / element.clientHeight, this.object.matrix);
+        this._panUp(2 * deltaY * targetDistance / element.clientHeight, this.object.matrix);
+      }
+    }
+
+    _dollyOut(dollyScale) { this._scale /= dollyScale; this._zoomChanged = true; }
+    _dollyIn(dollyScale) { this._scale *= dollyScale; this._zoomChanged = true; }
+
+    _getZoomScale() { return Math.pow(0.95, this.zoomSpeed); }
+
+    _onPointerDown(event) {
+      if (!this.enabled) return;
+      switch(event.button) {
+        case 0: // left
+          if (this.enableRotate) {
+            this._rotateStart.set(event.clientX, event.clientY);
+            this._state = STATE.ROTATE;
+          }
+          break;
+        case 1: // middle
+          if (this.enableZoom) {
+            this._dollyStart.set(event.clientX, event.clientY);
+            this._state = STATE.DOLLY;
+          }
+          break;
+        case 2: // right
+          if (this.enablePan) {
+            this._panStart.set(event.clientX, event.clientY);
+            this._state = STATE.PAN;
+          }
+          break;
+      }
+
+      if (this._state !== STATE.NONE) {
+        const onPointerMove = (e) => this._onPointerMove(e);
+        const onPointerUp = () => {
+          document.removeEventListener('pointermove', onPointerMove);
+          document.removeEventListener('pointerup', onPointerUp);
+          this._state = STATE.NONE;
+          this.dispatchEvent(_endEvent);
+        };
+        document.addEventListener('pointermove', onPointerMove);
+        document.addEventListener('pointerup', onPointerUp);
+        this.dispatchEvent(_startEvent);
+      }
+    }
+
+    _onPointerMove(event) {
+      if (!this.enabled) return;
+      switch(this._state) {
+        case STATE.ROTATE:
+          this._rotateEnd.set(event.clientX, event.clientY);
+          this._rotateDelta.subVectors(this._rotateEnd, this._rotateStart).multiplyScalar(this.rotateSpeed);
+          const element = this.domElement;
+          this._sphericalDelta.theta -= twoPI * this._rotateDelta.x / element.clientHeight;
+          this._sphericalDelta.phi -= twoPI * this._rotateDelta.y / element.clientHeight;
+          this._rotateStart.copy(this._rotateEnd);
+          break;
+        case STATE.DOLLY:
+          this._dollyEnd.set(event.clientX, event.clientY);
+          this._dollyDelta.subVectors(this._dollyEnd, this._dollyStart);
+          if (this._dollyDelta.y > 0) this._dollyOut(this._getZoomScale());
+          else if (this._dollyDelta.y < 0) this._dollyIn(this._getZoomScale());
+          this._dollyStart.copy(this._dollyEnd);
+          break;
+        case STATE.PAN:
+          this._panEnd.set(event.clientX, event.clientY);
+          this._panDelta.subVectors(this._panEnd, this._panStart).multiplyScalar(this.panSpeed);
+          this._pan(this._panDelta.x, this._panDelta.y);
+          this._panStart.copy(this._panEnd);
+          break;
+      }
+    }
+
+    _onMouseWheel(event) {
+      if (!this.enabled || !this.enableZoom) return;
+      event.preventDefault();
+      if (event.deltaY < 0) this._dollyIn(this._getZoomScale());
+      else if (event.deltaY > 0) this._dollyOut(this._getZoomScale());
+    }
+  }
+
+  THREE.OrbitControls = OrbitControls;
+})();
+
+/**
+ * Inline TransformControls stub - rotation-only mode
+ * We build a minimal rotation gizmo rather than pulling the full TransformControls
+ */
+(function() {
+  class RotationGizmo {
+    constructor(camera, domElement) {
+      this.camera = camera;
+      this.domElement = domElement;
+      this.object = null;
+      this.enabled = false;
+      this._group = new THREE.Group();
+      this._group.visible = false;
+      this._raycaster = new THREE.Raycaster();
+      this._mouse = new THREE.Vector2();
+      this._active = null;
+      this._startAngle = 0;
+      this._startQuat = new THREE.Quaternion();
+      this._plane = new THREE.Plane();
+      this._rings = {};
+      this._hitTargets = [];
+
+      this._buildRings();
+      this._bindEvents();
+
+      this.onChange = null;
+    }
+
+    get gizmoGroup() { return this._group; }
+
+    _buildRings() {
+      const ringGeo = new THREE.TorusGeometry(1, 0.02, 8, 64);
+      const hitGeo = new THREE.TorusGeometry(1, 0.08, 8, 64);
+      const axes = [
+        { name: 'x', color: 0xe57373, rotation: [0, Math.PI/2, 0] },
+        { name: 'y', color: 0x81c784, rotation: [Math.PI/2, 0, 0] },
+        { name: 'z', color: 0x4fc3f7, rotation: [0, 0, 0] },
+      ];
+      axes.forEach(({ name, color, rotation }) => {
+        const ring = new THREE.Mesh(ringGeo.clone(), new THREE.MeshBasicMaterial({
+          color, transparent: true, opacity: 0.6, depthTest: false,
+        }));
+        ring.rotation.set(...rotation);
+        ring.renderOrder = 1000;
+        ring.userData._axis = name;
+        this._group.add(ring);
+        this._rings[name] = ring;
+
+        // invisible hit target
+        const hit = new THREE.Mesh(hitGeo.clone(), new THREE.MeshBasicMaterial({
+          visible: false,
+        }));
+        hit.rotation.set(...rotation);
+        hit.userData._axis = name;
+        this._group.add(hit);
+        this._hitTargets.push(hit);
+      });
+    }
+
+    attach(object) {
+      this.object = object;
+      this.enabled = true;
+      this._group.visible = true;
+      this._syncTransform();
+    }
+
+    detach() {
+      this.object = null;
+      this.enabled = false;
+      this._group.visible = false;
+    }
+
+    _syncTransform() {
+      if (!this.object) return;
+      const box = new THREE.Box3().setFromObject(this.object);
+      const center = new THREE.Vector3();
+      const size = new THREE.Vector3();
+      box.getCenter(center);
+      box.getSize(size);
+      const scale = Math.max(size.x, size.y, size.z) * 0.6;
+      this._group.position.copy(center);
+      this._group.scale.setScalar(scale);
+    }
+
+    updateScale(camera) {
+      if (!this.object || !this.enabled) return;
+      // Keep gizmo at constant screen size relative to distance
+      const dist = camera.position.distanceTo(this._group.position);
+      const baseScale = dist * 0.15;
+      this._group.scale.setScalar(baseScale);
+    }
+
+    _bindEvents() {
+      const el = this.domElement;
+
+      el.addEventListener('pointerdown', (e) => {
+        if (!this.enabled || e.button !== 0) return;
+        this._updateMouse(e);
+        this._raycaster.setFromCamera(this._mouse, this.camera);
+        const hits = this._raycaster.intersectObjects(this._hitTargets);
+        if (hits.length === 0) return;
+
+        const axis = hits[0].object.userData._axis;
+        this._active = axis;
+        this._startQuat.copy(this.object.quaternion);
+
+        // Highlight active ring
+        Object.entries(this._rings).forEach(([n, r]) => {
+          r.material.opacity = n === axis ? 1.0 : 0.15;
+        });
+
+        // Compute starting angle
+        this._startAngle = this._getAngle(e, axis);
+
+        e.stopPropagation();
+        e.preventDefault();
+
+        const onMove = (ev) => {
+          if (!this._active) return;
+          ev.stopPropagation();
+          ev.preventDefault();
+          const angle = this._getAngle(ev, this._active);
+          const delta = angle - this._startAngle;
+
+          this.object.quaternion.copy(this._startQuat);
+          const axisVec = new THREE.Vector3(
+            this._active === 'x' ? 1 : 0,
+            this._active === 'y' ? 1 : 0,
+            this._active === 'z' ? 1 : 0,
+          );
+          this.object.rotateOnWorldAxis(axisVec, delta);
+          this.onChange?.();
+        };
+
+        const onUp = (ev) => {
+          ev.stopPropagation();
+          this._active = null;
+          Object.values(this._rings).forEach(r => { r.material.opacity = 0.6; });
+          document.removeEventListener('pointermove', onMove, true);
+          document.removeEventListener('pointerup', onUp, true);
+        };
+
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', onUp, true);
+      });
+    }
+
+    _updateMouse(e) {
+      const rect = this.domElement.getBoundingClientRect();
+      this._mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      this._mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
+    _getAngle(e, axis) {
+      // Project mouse onto a screen-space angle relative to gizmo center
+      const rect = this.domElement.getBoundingClientRect();
+      const cx = this._group.position.clone().project(this.camera);
+      const screenCenter = new THREE.Vector2(
+        (cx.x * 0.5 + 0.5) * rect.width,
+        (-cx.y * 0.5 + 0.5) * rect.height,
+      );
+      const dx = e.clientX - rect.left - screenCenter.x;
+      const dy = e.clientY - rect.top - screenCenter.y;
+      return Math.atan2(dy, dx);
+    }
+  }
+
+  THREE.RotationGizmo = RotationGizmo;
+})();
+</script>
+
+<!-- GLTFLoader -->
+<script>
+(function() {
+  // Minimal GLTFLoader for r128 - inline to avoid CDN issues
+  // This is a simplified version that handles .glb binary files
+  class GLTFLoader {
+    constructor() { this.manager = THREE.DefaultLoadingManager; }
+
+    load(url, onLoad, onProgress, onError) {
+      const loader = new THREE.FileLoader(this.manager);
+      loader.setResponseType('arraybuffer');
+      loader.load(url, (data) => {
+        try {
+          this.parse(data, '', onLoad, onError);
+        } catch(e) { if (onError) onError(e); else console.error(e); }
+      }, onProgress, onError);
+    }
+
+    parse(data, path, onLoad, onError) {
+      // Check if GLB (binary)
+      const magic = new Uint32Array(data, 0, 1)[0];
+      if (magic === 0x46546C67) {
+        this._parseGLB(data, onLoad, onError);
+      } else {
+        // Try as JSON glTF
+        const decoder = new TextDecoder();
+        const json = JSON.parse(decoder.decode(data));
+        this._parseJSON(json, null, onLoad, onError);
+      }
+    }
+
+    _parseGLB(data, onLoad, onError) {
+      const headerView = new DataView(data);
+      const version = headerView.getUint32(4, true);
+      const length = headerView.getUint32(8, true);
+
+      let jsonChunk = null, binChunk = null;
+      let offset = 12;
+
+      while (offset < length) {
+        const chunkLength = headerView.getUint32(offset, true);
+        const chunkType = headerView.getUint32(offset + 4, true);
+        if (chunkType === 0x4E4F534A) {
+          const jsonData = new Uint8Array(data, offset + 8, chunkLength);
+          jsonChunk = JSON.parse(new TextDecoder().decode(jsonData));
+        } else if (chunkType === 0x004E4942) {
+          binChunk = data.slice(offset + 8, offset + 8 + chunkLength);
+        }
+        offset += 8 + chunkLength;
+      }
+
+      if (jsonChunk) {
+        this._parseJSON(jsonChunk, binChunk, onLoad, onError);
+      } else {
+        if (onError) onError(new Error('No JSON chunk in GLB'));
+      }
+    }
+
+    _parseJSON(json, bin, onLoad, onError) {
+      try {
+        const buffers = [];
+        if (bin) buffers.push(bin);
+
+        // Parse buffer views
+        const bufferViews = (json.bufferViews || []).map(bv => {
+          const buf = buffers[bv.buffer || 0];
+          return new Uint8Array(buf, bv.byteOffset || 0, bv.byteLength);
+        });
+
+        // Parse accessors
+        const accessors = (json.accessors || []).map(acc => {
+          const bv = bufferViews[acc.bufferView];
+          const componentTypes = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+          const TypedArray = componentTypes[acc.componentType] || Float32Array;
+          const typeCount = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 }[acc.type] || 1;
+          const byteOffset = acc.byteOffset || 0;
+          const data = new TypedArray(bv.buffer, bv.byteOffset + byteOffset, acc.count * typeCount);
+          return { data, count: acc.count, type: acc.type, componentType: acc.componentType, typeCount };
+        });
+
+        // Parse materials
+        const materials = (json.materials || []).map(mat => {
+          const pbr = mat.pbrMetallicRoughness || {};
+          const color = pbr.baseColorFactor || [0.8, 0.8, 0.8, 1.0];
+          const m = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(color[0], color[1], color[2]),
+            roughness: pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 0.7,
+            metalness: pbr.metallicFactor !== undefined ? pbr.metallicFactor : 0.1,
+            side: THREE.DoubleSide,
+            transparent: color[3] < 1.0,
+            opacity: color[3],
+          });
+          m.name = mat.name || '';
+          return m;
+        });
+
+        if (materials.length === 0) {
+          materials.push(new THREE.MeshStandardMaterial({
+            color: 0x888888, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide,
+          }));
+        }
+
+        // Parse meshes
+        const meshDefs = (json.meshes || []).map(meshDef => {
+          return meshDef.primitives.map(prim => {
+            const geo = new THREE.BufferGeometry();
+
+            if (prim.attributes.POSITION !== undefined) {
+              const acc = accessors[prim.attributes.POSITION];
+              geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(acc.data), 3));
+            }
+            if (prim.attributes.NORMAL !== undefined) {
+              const acc = accessors[prim.attributes.NORMAL];
+              geo.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(acc.data), 3));
+            }
+            if (prim.indices !== undefined) {
+              const acc = accessors[prim.indices];
+              const idx = acc.componentType === 5125 ? new Uint32Array(acc.data) : new Uint16Array(acc.data);
+              geo.setIndex(new THREE.BufferAttribute(idx, 1));
+            }
+
+            if (!prim.attributes.NORMAL) geo.computeVertexNormals();
+
+            const matIdx = prim.material !== undefined ? prim.material : 0;
+            return { geometry: geo, material: materials[matIdx], name: meshDef.name || '' };
+          });
+        });
+
+        // Parse nodes into scene graph
+        const scene = new THREE.Group();
+        scene.name = 'LoadedModel';
+
+        const nodeDefs = json.nodes || [];
+        const nodeObjects = nodeDefs.map((nodeDef, i) => {
+          let obj;
+          if (nodeDef.mesh !== undefined) {
+            const prims = meshDefs[nodeDef.mesh];
+            if (prims.length === 1) {
+              obj = new THREE.Mesh(prims[0].geometry, prims[0].material);
+              obj.name = nodeDef.name || prims[0].name || `Mesh_${i}`;
+            } else {
+              obj = new THREE.Group();
+              obj.name = nodeDef.name || `Node_${i}`;
+              prims.forEach((p, pi) => {
+                const m = new THREE.Mesh(p.geometry, p.material);
+                m.name = p.name ? `${p.name}_prim${pi}` : `prim_${pi}`;
+                obj.add(m);
+              });
+            }
+          } else {
+            obj = new THREE.Group();
+            obj.name = nodeDef.name || `Node_${i}`;
+          }
+
+          if (nodeDef.translation) obj.position.fromArray(nodeDef.translation);
+          if (nodeDef.rotation) obj.quaternion.fromArray(nodeDef.rotation);
+          if (nodeDef.scale) obj.scale.fromArray(nodeDef.scale);
+          if (nodeDef.matrix) {
+            const m = new THREE.Matrix4().fromArray(nodeDef.matrix);
+            m.decompose(obj.position, obj.quaternion, obj.scale);
+          }
+
+          return obj;
+        });
+
+        // Set up parent-child relationships
+        nodeDefs.forEach((nodeDef, i) => {
+          if (nodeDef.children) {
+            nodeDef.children.forEach(childIdx => {
+              nodeObjects[i].add(nodeObjects[childIdx]);
+            });
+          }
+        });
+
+        // Add root nodes to scene
+        const sceneDef = (json.scenes || [{}])[json.scene || 0];
+        const rootNodes = sceneDef.nodes || nodeDefs.map((_, i) => i).filter(i => {
+          return !nodeDefs.some(n => n.children && n.children.includes(i));
+        });
+        rootNodes.forEach(i => scene.add(nodeObjects[i]));
+
+        onLoad({ scene, scenes: [scene], cameras: [], animations: [] });
+      } catch (e) {
+        if (onError) onError(e); else console.error(e);
+      }
+    }
+  }
+
+  THREE.GLTFLoader = GLTFLoader;
+})();
+</script>
+
+<script>
+// ============================================================
+//  VIEWER CORE
+// ============================================================
+class Viewer {
+  constructor(container) {
+    this.container = container;
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x1a1d23);
+    this.camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 10000);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.localClippingEnabled = true;
+    container.appendChild(this.renderer.domElement);
+    this.raycaster = new THREE.Raycaster();
+    this._setupLights();
+    this._ticks = [];
+    this._grid = null;
+    addEventListener('resize', () => {
+      this.camera.aspect = innerWidth / innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(innerWidth, innerHeight);
+    });
+  }
+  get canvas() { return this.renderer.domElement; }
+  _setupLights() {
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    this.scene.add(new THREE.HemisphereLight(0x87ceeb, 0x362a1e, 0.3));
+    const d1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    d1.position.set(20, 30, 20); d1.castShadow = true; this.scene.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    d2.position.set(-15, 10, -10); this.scene.add(d2);
+  }
+  setupGrid(span) {
+    if (this._grid) this.scene.remove(this._grid);
+    const s = span * 3, d = Math.max(10, Math.round(s / (span * 0.1)));
+    this._grid = new THREE.GridHelper(s, d, 0x333840, 0x262a30);
+    this.scene.add(this._grid);
+  }
+  setupCameraClip(span) {
+    this.camera.near = span * 0.001; this.camera.far = span * 100;
+    this.camera.updateProjectionMatrix();
+  }
+  raycast(event, objects, exclude) {
+    const r = this.canvas.getBoundingClientRect();
+    const m = new THREE.Vector2(
+      ((event.clientX - r.left) / r.width) * 2 - 1,
+      -((event.clientY - r.top) / r.height) * 2 + 1
+    );
+    this.raycaster.setFromCamera(m, this.camera);
+    const hits = this.raycaster.intersectObjects(objects, true);
+    return exclude?.size ? hits.filter(h => !exclude.has(h.object)) : hits;
+  }
+  onTick(fn) { this._ticks.push(fn); }
+  start() {
+    const loop = () => {
+      requestAnimationFrame(loop);
+      this._ticks.forEach(f => f());
+      this.renderer.render(this.scene, this.camera);
+    };
+    loop();
+  }
+}
+
+
+// ============================================================
+//  INTERACTION CONTROLLER
+//  Uses OrbitControls, adds tool modes on top
+// ============================================================
+class InteractionController {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.camera = viewer.camera;
+    this.canvas = viewer.canvas;
+    this.mode = 'orbit'; // orbit | select | set-pivot | measure
+
+    // OrbitControls
+    this.controls = new THREE.OrbitControls(viewer.camera, viewer.canvas);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.08;
+    this.controls.rotateSpeed = 0.8;
+    this.controls.panSpeed = 1.0;
+    this.controls.zoomSpeed = 1.0;
+    this.controls.screenSpacePanning = true;
+    this.controls.minPolarAngle = 0.05;
+    this.controls.maxPolarAngle = Math.PI - 0.05;
+
+    // Pivot marker (screen-space scaled)
+    this._pivotMarker = this._createPivotMarker();
+    viewer.scene.add(this._pivotMarker);
+
+    // Preview dot for set-pivot / measure modes
+    this._previewDot = this._createPreviewDot();
+    this._previewDot.visible = false;
+    viewer.scene.add(this._previewDot);
+
+    // Exclude these from raycasting
+    this._excluded = new Set();
+    this._collect(this._pivotMarker);
+    this._collect(this._previewDot);
+
+    this._targetGroup = null;
+
+    // External callbacks
+    this.onModelClick = null;
+    this.onEmptyClick = null;
+    this.onHover = null;
+    this.onPivotChanged = null;
+    this.onModeChanged = null;
+
+    // Throttled hover raycast (every 50ms instead of every frame)
+    this._hoverThrottleMs = 50;
+    this._lastHoverTime = 0;
+    this._lastHoverEvent = null;
+
+    this._bindPivotSync();
+    this._bindToolClicks();
+    this._bindHover();
+
+    viewer.onTick(() => this._tick());
+  }
+
+  setScale(span) {
+    this.controls.minDistance = span * 0.05;
+    this.controls.maxDistance = span * 20;
+  }
+
+  setTargetGroup(g) { this._targetGroup = g; }
+
+  setMode(m) {
+    this.mode = m;
+    this._previewDot.visible = false;
+    this.onHover?.(null);
+
+    // Enable/disable orbit based on mode
+    if (m === 'orbit') {
+      this.controls.enableRotate = true;
+      this.controls.enablePan = true;
+      this.canvas.style.cursor = '';
+    } else {
+      // In tool modes, orbit still works on right-click (pan) and middle (zoom)
+      // but left-click is intercepted for tool action
+      this.controls.enableRotate = false;
+      this.controls.enablePan = true;
+      this.canvas.style.cursor = m === 'select' ? 'pointer' : 'crosshair';
+    }
+    this.onModeChanged?.(m);
+  }
+
+  setPivot(p) {
+    this.controls.target.copy(p);
+    this._pivotMarker.position.copy(p);
+    this.onPivotChanged?.(p);
+  }
+
+  get pivot() { return this.controls.target; }
+
+  zoomToExtents(b) {
+    const c = new THREE.Vector3(), s = new THREE.Vector3();
+    b.getCenter(c); b.getSize(s);
+    const dist = Math.max(s.x, s.y, s.z) * 1.5;
+    this.controls.target.copy(c);
+    this._pivotMarker.position.copy(c);
+
+    // Position camera at a nice angle
+    const phi = Math.PI / 3, theta = Math.PI / 4;
+    this.camera.position.set(
+      c.x + dist * Math.sin(phi) * Math.cos(theta),
+      c.y + dist * Math.cos(phi),
+      c.z + dist * Math.sin(phi) * Math.sin(theta)
+    );
+    this.camera.lookAt(c);
+    this.onPivotChanged?.(c);
+  }
+
+  resetPivotToCenter(b) {
+    const c = new THREE.Vector3();
+    b.getCenter(c);
+    this.setPivot(c);
+  }
+
+  // ---- Internal ----
+
+  _collect(o) { o.traverse(c => this._excluded.add(c)); }
+
+  _raycastModel(e) {
+    if (!this._targetGroup) return [];
+    return this.viewer.raycast(e, this._targetGroup.children, this._excluded);
+  }
+
+  _createPivotMarker() {
+    const g = new THREE.Group();
+    g.userData._isPivotMarker = true;
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.6, depthTest: false })
+    );
+    core.renderOrder = 998;
+    g.add(core);
+
+    const mat = new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.4, depthTest: false });
+    [[[-3.5,0,0],[3.5,0,0]],[[0,-3.5,0],[0,3.5,0]],[[0,0,-3.5],[0,0,3.5]]].forEach(([a, b]) => {
+      const bg = new THREE.BufferGeometry();
+      bg.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b], 3));
+      const line = new THREE.Line(bg, mat);
+      line.renderOrder = 998;
+      g.add(line);
+    });
+    return g;
+  }
+
+  _createPreviewDot() {
+    const g = new THREE.Group();
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfff176, transparent: true, opacity: 0.9, depthTest: false })
+    );
+    core.renderOrder = 999;
+    g.add(core);
+    const glow = new THREE.Mesh(
+      new THREE.SphereGeometry(2.5, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0xfff176, transparent: true, opacity: 0.15, depthTest: false })
+    );
+    glow.renderOrder = 999;
+    g.add(glow);
+    return g;
+  }
+
+  _bindPivotSync() {
+    // Keep pivot marker in sync when OrbitControls pans
+    this.controls.addEventListener('change', () => {
+      this._pivotMarker.position.copy(this.controls.target);
+      this.onPivotChanged?.(this.controls.target);
+    });
+  }
+
+  _bindToolClicks() {
+    // Intercept left-click for tool modes
+    this.canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // only left click
+      if (this.mode === 'orbit') return; // let OrbitControls handle
+
+      const hits = this._raycastModel(e);
+      if (hits.length > 0) {
+        if (this.mode === 'set-pivot') {
+          this.setPivot(hits[0].point);
+          this.setMode('orbit');
+        } else if (this.mode === 'select' || this.mode === 'measure') {
+          this.onModelClick?.(hits[0]);
+        }
+      } else {
+        this.onEmptyClick?.();
+      }
+    });
+  }
+
+  _bindHover() {
+    this.canvas.addEventListener('mousemove', (e) => {
+      this._lastHoverEvent = e;
+    });
+    this.canvas.addEventListener('mouseleave', () => {
+      this._previewDot.visible = false;
+      this.onHover?.(null);
+      this._lastHoverEvent = null;
+    });
+  }
+
+  _processHover() {
+    const e = this._lastHoverEvent;
+    if (!e) return;
+
+    const now = performance.now();
+    if (now - this._lastHoverTime < this._hoverThrottleMs) return;
+    this._lastHoverTime = now;
+
+    if (this.mode === 'set-pivot' || this.mode === 'measure') {
+      const hits = this._raycastModel(e);
+      if (hits.length > 0) {
+        const h = hits[0];
+        const off = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld).multiplyScalar(0.002) : new THREE.Vector3();
+        this._previewDot.position.copy(h.point).add(off);
+        this._previewDot.visible = true;
+      } else {
+        this._previewDot.visible = false;
+      }
+    } else if (this.mode === 'select') {
+      const hits = this._raycastModel(e);
+      this.onHover?.(hits.length > 0 ? hits[0].object : null);
+    }
+  }
+
+  _tick() {
+    this.controls.update(); // required for damping
+
+    // Screen-space constant size for pivot marker
+    const dist = this.camera.position.distanceTo(this._pivotMarker.position);
+    const pivotScale = dist * 0.008;
+    this._pivotMarker.scale.setScalar(pivotScale);
+    this._pivotMarker.rotation.y += 0.01;
+
+    // Screen-space constant size for preview dot
+    if (this._previewDot.visible) {
+      const dotDist = this.camera.position.distanceTo(this._previewDot.position);
+      this._previewDot.scale.setScalar(dotDist * 0.005);
+    }
+
+    // Throttled hover raycast
+    this._processHover();
+  }
+}
+
+
+// ============================================================
+//  SECTION BOX
+// ============================================================
+class SectionBox {
+  constructor(viewer) {
+    this.viewer = viewer; this.enabled = false;
+    this.fullBounds = new THREE.Box3(); this.bounds = new THREE.Box3();
+    this.planes = Array.from({ length: 6 }, () => new THREE.Plane());
+    this._helper = null;
+  }
+  setFullBounds(b) { this.fullBounds.copy(b); this.reset(); }
+  enable() { this.enabled = true; this.reset(); this._updatePlanes(); this.onChange?.(this.bounds); }
+  disable() { this.enabled = false; if (this._helper) this._helper.visible = false; }
+  reset() {
+    this.bounds.copy(this.fullBounds);
+    this.bounds.expandByScalar(this.fullBounds.getSize(new THREE.Vector3()).length() * 0.02);
+  }
+  getActiveBounds() { return this.enabled ? this.bounds : this.fullBounds; }
+  setFace(axis, side, pct) {
+    const pad = this.fullBounds.getSize(new THREE.Vector3()).length() * 0.02;
+    const lo = this.fullBounds.min[axis] - pad, hi = this.fullBounds.max[axis] + pad;
+    this.bounds[side][axis] = lo + pct * (hi - lo);
+    this._updatePlanes(); this.onChange?.(this.bounds);
+  }
+  onChange = null;
+  _updatePlanes() {
+    const { min, max } = this.bounds;
+    const n = (x,y,z) => new THREE.Vector3(x,y,z);
+    this.planes[0].set(n(-1,0,0), max.x);  this.planes[1].set(n(1,0,0), -min.x);
+    this.planes[2].set(n(0,-1,0), max.y);  this.planes[3].set(n(0,1,0), -min.y);
+    this.planes[4].set(n(0,0,-1), max.z);  this.planes[5].set(n(0,0,1), -min.z);
+    this._updateHelper();
+  }
+  _updateHelper() {
+    if (this._helper) this.viewer.scene.remove(this._helper);
+    const s = new THREE.Vector3(), c = new THREE.Vector3();
+    this.bounds.getSize(s); this.bounds.getCenter(c);
+    this._helper = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(s.x, s.y, s.z)),
+      new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.7 })
+    );
+    this._helper.position.copy(c); this._helper.visible = this.enabled;
+    this.viewer.scene.add(this._helper);
+  }
+}
+
+
+// ============================================================
+//  MODEL MANAGER — supports loaded models + demo
+// ============================================================
+class ModelManager {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this.group = new THREE.Group();
+    viewer.scene.add(this.group);
+    this.layers = [];
+    this._layerGroupMode = 'node'; // node | material | mesh
+  }
+
+  getBounds() { return new THREE.Box3().setFromObject(this.group); }
+  getSpan() { const s = new THREE.Vector3(); this.getBounds().getSize(s); return Math.max(s.x, s.y, s.z); }
+
+  setClippingPlanes(planes) { this._eachMat(m => { m.clippingPlanes = planes; m.clipShadows = true; m.needsUpdate = true; }); }
+  clearClippingPlanes() { this._eachMat(m => { m.clippingPlanes = []; m.needsUpdate = true; }); }
+  setWireframe(on) { this._eachMat(m => { m.wireframe = on; }); }
+  setGhost(on) { this._eachMat(m => { m.transparent = true; m.opacity = on ? 0.25 : 1.0; m.needsUpdate = true; }); }
+
+  /** Load a glTF/GLB scene into the group */
+  loadScene(gltfScene) {
+    // Clear existing
+    while (this.group.children.length) this.group.remove(this.group.children[0]);
+    this.group.add(gltfScene);
+    this.buildLayersFromScene();
+  }
+
+  /** Build layers from the actual scene graph */
+  buildLayersFromScene(mode) {
+    if (mode) this._layerGroupMode = mode;
+    const groups = new Map();
+
+    this.group.traverse(child => {
+      if (!child.isMesh) return;
+
+      let key;
+      switch (this._layerGroupMode) {
+        case 'material':
+          key = child.material?.name || `Material_${child.material?.id || 0}`;
+          break;
+        case 'mesh':
+          key = child.name || child.uuid.substr(0, 8);
+          break;
+        case 'node':
+        default:
+          // Try: userData type (IFC), parent name, own name, material name
+          key =
+            child.userData?.type ||
+            (child.parent && child.parent !== this.group && child.parent.name ? child.parent.name : null) ||
+            child.name ||
+            child.material?.name ||
+            'Ungrouped';
+          break;
+      }
+
+      if (!groups.has(key)) {
+        const color = child.material?.color?.getHex?.() ?? 0x888888;
+        groups.set(key, { name: key, color, meshes: [] });
+      }
+      groups.get(key).meshes.push(child);
+    });
+
+    this.layers = Array.from(groups.values());
+    this.onLayersChanged?.();
+  }
+
+  onLayersChanged = null;
+
+  buildDemoModel() {
+    while (this.group.children.length) this.group.remove(this.group.children[0]);
+
+    const demoRoot = new THREE.Group();
+    demoRoot.name = 'DemoBuilding';
+
+    const makeMat = (color, name) => {
+      const m = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+      m.name = name;
+      return m;
+    };
+
+    const add = (geo, mat, pos, rot, name, parentName) => {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(...pos);
+      if (rot) mesh.rotation.set(...rot);
+      mesh.name = name || mat.name;
+
+      // Find or create parent group
+      let parent = demoRoot.children.find(c => c.name === parentName);
+      if (!parent) {
+        parent = new THREE.Group();
+        parent.name = parentName;
+        demoRoot.add(parent);
+      }
+      parent.add(mesh);
+    };
+
+    const B = (w,h,d) => new THREE.BoxGeometry(w,h,d);
+    const C = (r,h) => new THREE.CylinderGeometry(r,r,h,8);
+
+    const slbMat = makeMat(0x8d8d8d, 'Slabs');
+    const roofMat = makeMat(0x6d6d6d, 'Roof');
+    const w1Mat = makeMat(0xd4c9a8, 'Walls - Ground');
+    const w2Mat = makeMat(0xcec3a2, 'Walls - Upper');
+    const iwMat = makeMat(0xc4b998, 'Interior Walls');
+    const clMat = makeMat(0x607d8b, 'Columns');
+    const stMat = makeMat(0x78909c, 'Stairs');
+    const ppMat = makeMat(0x42a5f5, 'Pipes');
+    const dcMat = makeMat(0xbdbdbd, 'Ductwork');
+    const fnMat = makeMat(0x8d6e63, 'Furniture');
+
+    add(B(16,.4,12), slbMat, [0,-.2,0], null, 'Ground Slab', 'Slabs');
+    add(B(16,.3,12), slbMat, [0,4.15,0], null, '2nd Floor Slab', 'Slabs');
+    add(B(17,.3,13), roofMat, [0,8.15,0], null, 'Roof Slab', 'Roof');
+
+    add(B(4,4,.3), w1Mat, [-6,2,6], null, 'Front Wall L', 'Walls - Ground');
+    add(B(3,4,.3), w1Mat, [-1.5,2,6], null, 'Front Wall C', 'Walls - Ground');
+    add(B(4,4,.3), w1Mat, [4,2,6], null, 'Front Wall R', 'Walls - Ground');
+    add(B(16,1,.3), w1Mat, [0,3.5,6], null, 'Front Lintel', 'Walls - Ground');
+    add(B(16,4,.3), w1Mat, [0,2,-6], null, 'Back Wall', 'Walls - Ground');
+    add(B(.3,4,12), w1Mat, [-8,2,0], null, 'Left Wall', 'Walls - Ground');
+    add(B(.3,4,12), w1Mat, [8,2,0], null, 'Right Wall', 'Walls - Ground');
+    add(B(.3,4,8), iwMat, [-2,2,-1], null, 'Int Wall GF', 'Interior Walls');
+
+    add(B(16,4,.3), w2Mat, [0,6.3,6], null, 'Front Wall 2F', 'Walls - Upper');
+    add(B(16,4,.3), w2Mat, [0,6.3,-6], null, 'Back Wall 2F', 'Walls - Upper');
+    add(B(.3,4,12), w2Mat, [-8,6.3,0], null, 'Left Wall 2F', 'Walls - Upper');
+    add(B(.3,4,12), w2Mat, [8,6.3,0], null, 'Right Wall 2F', 'Walls - Upper');
+    add(B(10,4,.3), iwMat, [2,6.3,0], null, 'Int Wall 2F', 'Interior Walls');
+
+    [[-6,-4],[-6,4],[0,-4],[0,4],[6,-4],[6,4]].forEach(([x,z], i) => {
+      add(B(.5,8.3,.5), clMat, [x,4.15,z], null, `Column ${i+1}`, 'Columns');
+    });
+
+    for (let i = 0; i < 10; i++) add(B(2,.2,.8), stMat, [6,.1+i*.4,-4+i*.5], null, `Stair ${i+1}`, 'Stairs');
+
+    add(C(.1,14), ppMat, [0,3.8,3], [0,0,Math.PI/2], 'Pipe Run E-W', 'Pipes');
+    add(C(.1,10), ppMat, [-5,3.8,0], [Math.PI/2,0,0], 'Pipe Run N-S', 'Pipes');
+    add(B(12,.6,.8), dcMat, [1,7.6,2], null, 'Main Duct', 'Ductwork');
+
+    add(B(2,.1,1), fnMat, [-5,.75,1], null, 'Table Top', 'Furniture');
+    [[-.9,-.4],[.9,-.4],[-.9,.4],[.9,.4]].forEach(([dx,dz], i) => {
+      add(B(.1,.75,.1), fnMat, [-5+dx,.375,1+dz], null, `Table Leg ${i+1}`, 'Furniture');
+    });
+
+    this.group.add(demoRoot);
+    this.buildLayersFromScene();
+  }
+
+  _eachMat(fn) { this.group.traverse(c => { if (c.isMesh) fn(c.material); }); }
+}
+
+
+// ============================================================
+//  SELECTION MANAGER
+// ============================================================
+class SelectionManager {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this._outlines = [];
+    this.selected = null;
+    this._hovered = null;
+    this._hoverOutline = null;
+  }
+
+  select(mesh) {
+    this.clearSelection();
+    if (!mesh) return;
+    this.selected = mesh;
+    this._addOutline(mesh, 0xffb74d, 0.9, 998);
+    this.onSelectionChanged?.(mesh);
+  }
+
+  clearSelection() {
+    this._outlines.forEach(o => this.viewer.scene.remove(o));
+    this._outlines = [];
+    this.selected = null;
+    this.onSelectionChanged?.(null);
+  }
+
+  setHover(mesh) {
+    if (mesh === this._hovered) return;
+    if (mesh === this.selected) { this._clearHover(); return; }
+    this._clearHover();
+    if (!mesh) return;
+    this._hovered = mesh;
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 15);
+    this._hoverOutline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+      color: 0xffffff, depthTest: false, transparent: true, opacity: 0.35,
+    }));
+    this._hoverOutline.renderOrder = 997;
+    mesh.updateWorldMatrix(true, false);
+    this._hoverOutline.applyMatrix4(mesh.matrixWorld);
+    this.viewer.scene.add(this._hoverOutline);
+  }
+
+  _clearHover() {
+    if (this._hoverOutline) {
+      this.viewer.scene.remove(this._hoverOutline);
+      this._hoverOutline = null;
+    }
+    this._hovered = null;
+  }
+
+  _addOutline(mesh, color, opacity, order) {
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 15);
+    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+      color, linewidth: 1, depthTest: false, transparent: true, opacity,
+    }));
+    line.renderOrder = order;
+    mesh.updateWorldMatrix(true, false);
+    line.applyMatrix4(mesh.matrixWorld);
+    this.viewer.scene.add(line);
+    this._outlines.push(line);
+  }
+
+  onSelectionChanged = null;
+}
+
+
+// ============================================================
+//  MEASURE TOOL
+// ============================================================
+class MeasureTool {
+  constructor(viewer) {
+    this.viewer = viewer;
+    this._points = [];
+    this._markers = [];
+    this._line = null;
+  }
+
+  addPoint(point) {
+    if (this._points.length >= 2) this.clear();
+    this._points.push(point.clone());
+
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 12, 12),
+      new THREE.MeshBasicMaterial({ color: 0x81c784, depthTest: false, transparent: true, opacity: 0.9 })
+    );
+    marker.renderOrder = 999;
+    marker.position.copy(point);
+    marker.userData._isMeasureMarker = true;
+    this.viewer.scene.add(marker);
+    this._markers.push(marker);
+
+    if (this._points.length === 2) {
+      this._drawLine();
+      const dist = this._points[0].distanceTo(this._points[1]);
+      this.onMeasured?.(dist);
+    }
+  }
+
+  /** Update marker sizes based on camera distance (call each frame) */
+  updateMarkerSizes(camera) {
+    this._markers.forEach(m => {
+      const dist = camera.position.distanceTo(m.position);
+      m.scale.setScalar(dist * 0.006);
+    });
+  }
+
+  _drawLine() {
+    const geo = new THREE.BufferGeometry();
+    const pts = this._points;
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      pts[0].x, pts[0].y, pts[0].z, pts[1].x, pts[1].y, pts[1].z
+    ], 3));
+    this._line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color: 0x81c784, depthTest: false, transparent: true, opacity: 0.8,
+    }));
+    this._line.renderOrder = 999;
+    this.viewer.scene.add(this._line);
+  }
+
+  clear() {
+    this._markers.forEach(m => this.viewer.scene.remove(m));
+    this._markers = [];
+    if (this._line) { this.viewer.scene.remove(this._line); this._line = null; }
+    this._points = [];
+    this.onCleared?.();
+  }
+
+  onMeasured = null;
+  onCleared = null;
+}
+
+
+// ============================================================
+//  AXES HELPER
+// ============================================================
+class AxesHelper {
+  constructor(viewer, el) {
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setSize(90, 90);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    el.appendChild(this.renderer.domElement);
+    const ax = (d, c) => {
+      const g = new THREE.Group(), m = new THREE.MeshBasicMaterial({ color: c });
+      const s = new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,1.5,8), m);
+      s.position.copy(d.clone().multiplyScalar(.75));
+      if (d.x) s.rotation.z = -Math.PI/2*Math.sign(d.x);
+      if (d.z) s.rotation.x = Math.PI/2*Math.sign(d.z);
+      g.add(s);
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(0,.1,.25,8), m);
+      t.position.copy(d.clone().multiplyScalar(1.6));
+      if (d.x) t.rotation.z = -Math.PI/2*Math.sign(d.x);
+      if (d.z) t.rotation.x = Math.PI/2*Math.sign(d.z);
+      g.add(t); return g;
+    };
+    this.scene.add(ax(new THREE.Vector3(1,0,0), 0xe57373));
+    this.scene.add(ax(new THREE.Vector3(0,1,0), 0x81c784));
+    this.scene.add(ax(new THREE.Vector3(0,0,1), 0x4fc3f7));
+    this.scene.add(new THREE.Mesh(new THREE.SphereGeometry(.12,12,12), new THREE.MeshBasicMaterial({ color: 0x666666 })));
+    viewer.onTick(() => {
+      const d = new THREE.Vector3(); viewer.camera.getWorldDirection(d);
+      this.camera.position.copy(d.multiplyScalar(-4)); this.camera.lookAt(0,0,0);
+      this.renderer.render(this.scene, this.camera);
+    });
+  }
+}
+
+
+// ============================================================
+//  UI CONTROLLER
+// ============================================================
+class UIController {
+  constructor({ viewer, cam, section, model, selection, measure, rotationGizmo }) {
+    this.viewer = viewer; this.cam = cam; this.section = section;
+    this.model = model; this.selection = selection; this.measure = measure;
+    this.rotationGizmo = rotationGizmo;
+    this._wireOn = false; this._ghostOn = false;
+    this._activeFlyout = null;
+    this._rotateModelOn = false;
+
+    this._bindModes();
+    this._bindRotateModel();
+    this._bindSection();
+    this._bindView();
+    this._bindStyle();
+    this._bindLayers();
+    this._bindMeasure();
+    this._bindSelection();
+    this._bindPivot();
+    this._bindEscape();
+  }
+
+  _$(id) { return document.getElementById(id); }
+
+  _openFlyout(panelId) {
+    this._closeFlyout();
+    if (panelId) {
+      this._$(panelId).classList.add('visible');
+      this._activeFlyout = panelId;
+    }
+    this._$('btn-section-panel')?.classList.toggle('active', panelId === 'section-panel');
+    this._$('btn-layers').classList.toggle('active', panelId === 'layer-panel');
+  }
+
+  _closeFlyout() {
+    ['section-panel', 'layer-panel', 'measure-panel'].forEach(id => {
+      this._$(id).classList.remove('visible');
+    });
+    this._$('btn-section-panel')?.classList.remove('active');
+    this._$('btn-layers').classList.remove('active');
+    this._activeFlyout = null;
+  }
+
+  _toggleFlyout(panelId) {
+    if (this._activeFlyout === panelId) this._closeFlyout();
+    else this._openFlyout(panelId);
+  }
+
+  _bindEscape() {
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this.selection.clearSelection();
+        this.measure.clear();
+        this._closeFlyout();
+        if (this._rotateModelOn) {
+          this._rotateModelOn = false;
+          this.rotationGizmo.detach();
+          this._$('btn-rotate-model').classList.remove('active');
+        }
+        this.cam.setMode('orbit');
+      }
+    });
+  }
+
+  _bindModes() {
+    const modes = { 'btn-orbit': 'orbit', 'btn-select': 'select', 'btn-set-pivot': 'set-pivot', 'btn-measure': 'measure' };
+    const syncButtons = (mode) => {
+      Object.keys(modes).forEach(id => this._$(id).classList.toggle('active', modes[id] === mode));
+    };
+
+    Object.entries(modes).forEach(([id, mode]) => {
+      this._$(id).addEventListener('click', () => this.cam.setMode(mode));
+    });
+
+    this.cam.onModeChanged = (mode) => {
+      syncButtons(mode);
+      if (mode === 'measure') this._openFlyout('measure-panel');
+      else if (this._activeFlyout === 'measure-panel') this._closeFlyout();
+    };
+
+    this.cam.onModelClick = (hit) => {
+      if (this.cam.mode === 'select') this.selection.select(hit.object);
+      else if (this.cam.mode === 'measure') this.measure.addPoint(hit.point);
+    };
+
+    this.cam.onEmptyClick = () => {
+      if (this.cam.mode === 'select') this.selection.clearSelection();
+    };
+
+    this.cam.onHover = (mesh) => this.selection.setHover(mesh);
+  }
+
+  _bindRotateModel() {
+    this._$('btn-rotate-model').addEventListener('click', () => {
+      this._rotateModelOn = !this._rotateModelOn;
+      this._$('btn-rotate-model').classList.toggle('active', this._rotateModelOn);
+
+      if (this._rotateModelOn) {
+        // Attach gizmo to the model root
+        const modelRoot = this.model.group.children[0];
+        if (modelRoot) {
+          this.rotationGizmo.attach(modelRoot);
+          this.rotationGizmo.onChange = () => {
+            // Recalc bounds after rotation
+            const bounds = this.model.getBounds();
+            this.section.setFullBounds(bounds);
+          };
+        }
+      } else {
+        this.rotationGizmo.detach();
+      }
+    });
+  }
+
+  _bindSection() {
+    this._$('btn-section').addEventListener('click', () => {
+      const on = !this.section.enabled;
+      this._$('btn-section').classList.toggle('active', on);
+      if (on) {
+        this.section.enable(); this.model.setClippingPlanes(this.section.planes);
+        this._resetSliders();
+        this._$('btn-section-panel').style.display = '';
+        this._openFlyout('section-panel');
+      } else {
+        this.section.disable(); this.model.clearClippingPlanes();
+        this._$('btn-section-panel').style.display = 'none';
+        if (this._activeFlyout === 'section-panel') this._closeFlyout();
+      }
+    });
+
+    this._$('btn-section-panel').addEventListener('click', () => this._toggleFlyout('section-panel'));
+
+    this._$('btn-reset-section').addEventListener('click', () => {
+      this.section.reset(); this.section.enable();
+      this.model.setClippingPlanes(this.section.planes);
+      this._resetSliders(); this.cam.zoomToExtents(this.section.getActiveBounds());
+    });
+
+    ['x','y','z'].forEach(a => ['min','max'].forEach(s => {
+      const sl = this._$(`${a}-${s}`), lb = this._$(`${a}-${s}-val`);
+      sl.addEventListener('input', () => {
+        const p = parseInt(sl.value) / 100; lb.textContent = Math.round(p * 100);
+        this.section.setFace(a, s, p);
+      });
+    }));
+
+    this.section.onChange = (bounds) => {
+      if (this._activeFlyout === 'section-panel') {
+        const c = new THREE.Vector3(); bounds.getCenter(c); this.cam.setPivot(c);
+      }
+    };
+  }
+
+  _resetSliders() {
+    ['x','y','z'].forEach(a => {
+      this._$(`${a}-min`).value = 0; this._$(`${a}-max`).value = 100;
+      this._$(`${a}-min-val`).textContent = '0'; this._$(`${a}-max-val`).textContent = '100';
+    });
+  }
+
+  _bindView() {
+    this._$('btn-extents').addEventListener('click', () => this.cam.zoomToExtents(this.section.getActiveBounds()));
+    this._$('btn-reset-pivot').addEventListener('click', () => this.cam.resetPivotToCenter(this.section.getActiveBounds()));
+    this._$('btn-layers').addEventListener('click', () => this._toggleFlyout('layer-panel'));
+  }
+
+  _bindStyle() {
+    this._$('btn-wireframe').addEventListener('click', () => {
+      this._wireOn = !this._wireOn;
+      this._$('btn-wireframe').classList.toggle('active', this._wireOn);
+      this.model.setWireframe(this._wireOn);
+    });
+    this._$('btn-ghost').addEventListener('click', () => {
+      this._ghostOn = !this._ghostOn;
+      this._$('btn-ghost').classList.toggle('active', this._ghostOn);
+      this.model.setGhost(this._ghostOn);
+    });
+  }
+
+  _bindLayers() {
+    const eyeOpen = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    const eyeClosed = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+
+    const rebuild = () => {
+      const list = this._$('layer-list');
+      list.innerHTML = '';
+
+      this.model.layers.forEach((layer, idx) => {
+        const item = document.createElement('div');
+        item.className = 'layer-item'; item.dataset.idx = idx;
+
+        const swatch = document.createElement('div');
+        swatch.className = 'layer-swatch';
+        swatch.style.background = '#' + layer.color.toString(16).padStart(6, '0');
+
+        const name = document.createElement('span');
+        name.className = 'layer-name';
+        name.textContent = layer.name;
+        name.title = layer.name;
+
+        const count = document.createElement('span');
+        count.className = 'layer-count';
+        count.textContent = layer.meshes.length;
+
+        const vis = document.createElement('button');
+        vis.className = 'layer-vis'; vis.innerHTML = eyeOpen;
+
+        let visible = true;
+        vis.addEventListener('click', (e) => {
+          e.stopPropagation();
+          visible = !visible;
+          vis.innerHTML = visible ? eyeOpen : eyeClosed;
+          vis.classList.toggle('off', !visible);
+          name.classList.toggle('hidden-layer', !visible);
+          layer.meshes.forEach(m => { m.visible = visible; });
+        });
+
+        item.addEventListener('click', () => {
+          if (layer.meshes.length > 0) this.selection.select(layer.meshes[0]);
+        });
+
+        item.appendChild(swatch); item.appendChild(name);
+        item.appendChild(count); item.appendChild(vis);
+        list.appendChild(item);
+      });
+    };
+
+    // Rebuild when layers change
+    this.model.onLayersChanged = rebuild;
+    rebuild();
+
+    // Group mode toggles
+    ['node', 'material', 'mesh'].forEach(mode => {
+      this._$(`btn-group-${mode}`).addEventListener('click', () => {
+        ['node', 'material', 'mesh'].forEach(m => {
+          this._$(`btn-group-${m}`).classList.toggle('active', m === mode);
+        });
+        this.model.buildLayersFromScene(mode);
+      });
+    });
+
+    this._$('btn-show-all').addEventListener('click', () => {
+      this.model.layers.forEach(l => l.meshes.forEach(m => { m.visible = true; }));
+      rebuild();
+    });
+
+    this._$('btn-hide-all').addEventListener('click', () => {
+      this.model.layers.forEach(l => l.meshes.forEach(m => { m.visible = false; }));
+      const list = this._$('layer-list');
+      list.querySelectorAll('.layer-vis').forEach(b => { b.innerHTML = eyeClosed; b.classList.add('off'); });
+      list.querySelectorAll('.layer-name').forEach(n => n.classList.add('hidden-layer'));
+    });
+
+    this._$('btn-isolate-sel').addEventListener('click', () => {
+      const sel = this.selection.selected;
+      if (!sel) return;
+      // Find which layer contains this mesh
+      const selLayerIdx = this.model.layers.findIndex(l => l.meshes.includes(sel));
+      this.model.layers.forEach((l, idx) => {
+        const show = idx === selLayerIdx;
+        l.meshes.forEach(m => { m.visible = show; });
+      });
+      rebuild();
+      // Re-apply hidden state in UI
+      const list = this._$('layer-list');
+      list.querySelectorAll('.layer-item').forEach((item, idx) => {
+        const show = idx === selLayerIdx;
+        const btn = item.querySelector('.layer-vis');
+        const nm = item.querySelector('.layer-name');
+        btn.innerHTML = show ? eyeOpen : eyeClosed;
+        btn.classList.toggle('off', !show);
+        nm.classList.toggle('hidden-layer', !show);
+      });
+    });
+  }
+
+  _bindMeasure() {
+    this.measure.onMeasured = (dist) => {
+      this._$('measure-result').style.display = '';
+      this._$('measure-value').textContent = dist.toFixed(3);
+      this._$('measure-hint').innerHTML = 'Click two new points to re-measure.';
+    };
+    this.measure.onCleared = () => {
+      this._$('measure-result').style.display = 'none';
+      this._$('measure-hint').innerHTML = 'Click <strong>two points</strong> on the model to measure the distance between them.';
+    };
+    this._$('btn-clear-measure').addEventListener('click', () => this.measure.clear());
+  }
+
+  _bindSelection() {
+    const info = this._$('selection-info');
+    const list = this._$('layer-list');
+
+    this.selection.onSelectionChanged = (mesh) => {
+      if (mesh) {
+        info.classList.add('visible');
+        this._$('sel-name').textContent = mesh.name || 'Unnamed';
+        const b = new THREE.Box3().setFromObject(mesh);
+        const s = new THREE.Vector3(); b.getSize(s);
+        const p = new THREE.Vector3(); b.getCenter(p);
+
+        // Find layer
+        const layerName = this.model.layers.find(l => l.meshes.includes(mesh))?.name || '—';
+
+        this._$('sel-detail').innerHTML =
+          `Layer: ${layerName}<br>` +
+          `Size: ${s.x.toFixed(2)} × ${s.y.toFixed(2)} × ${s.z.toFixed(2)}<br>` +
+          `Center: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
+
+        // Sync layer list highlight
+        list.querySelectorAll('.layer-item').forEach(item => {
+          const idx = parseInt(item.dataset.idx);
+          item.classList.toggle('selected', this.model.layers[idx]?.meshes.includes(mesh));
+        });
+      } else {
+        info.classList.remove('visible');
+        list.querySelectorAll('.layer-item').forEach(i => i.classList.remove('selected'));
+      }
+    };
+  }
+
+  _bindPivot() {
+    const el = this._$('pivot-coords');
+    const up = p => { el.textContent = `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`; };
+    this.cam.onPivotChanged = up;
+    up(this.cam.pivot);
+  }
+}
+
+
+// ============================================================
+//  FILE LOADER
+// ============================================================
+class FileLoader {
+  constructor() {
+    this._loader = new THREE.GLTFLoader();
+  }
+
+  loadFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        this._loader.parse(e.target.result, '', (gltf) => {
+          resolve(gltf);
+        }, reject);
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  }
+}
+
+
+// ============================================================
+//  BOOTSTRAP
+// ============================================================
+(function main() {
+  const container = document.getElementById('canvas-container');
+  const viewer = new Viewer(container);
+  const cam = new InteractionController(viewer);
+  const section = new SectionBox(viewer);
+  const model = new ModelManager(viewer);
+  const selection = new SelectionManager(viewer);
+  const measure = new MeasureTool(viewer);
+  const rotationGizmo = new THREE.RotationGizmo(viewer.camera, viewer.canvas);
+  viewer.scene.add(rotationGizmo.gizmoGroup);
+
+  new AxesHelper(viewer, document.getElementById('axes-container'));
+
+  const fileLoader = new FileLoader();
+
+  // Update measure marker sizes + rotation gizmo each frame
+  viewer.onTick(() => {
+    measure.updateMarkerSizes(viewer.camera);
+    rotationGizmo.updateScale(viewer.camera);
+  });
+
+  function initializeScene() {
+    const bounds = model.getBounds();
+    const span = model.getSpan();
+
+    viewer.setupGrid(span);
+    viewer.setupCameraClip(span);
+    section.setFullBounds(bounds);
+    cam.setScale(span);
+    cam.setTargetGroup(model.group);
+    cam.zoomToExtents(bounds);
+
+    // Show UI
+    document.getElementById('main-toolbar').style.display = '';
+    document.getElementById('info-panel').style.display = '';
+    document.getElementById('pivot-indicator').style.display = '';
+
+    new UIController({ viewer, cam, section, model, selection, measure, rotationGizmo });
+  }
+
+  // ---- Drop zone / file loading ----
+  const dropZone = document.getElementById('drop-zone');
+  const loading = document.getElementById('loading');
+
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+  });
+
+  dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('dragover');
+  });
+
+  dropZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+
+    dropZone.innerHTML = '<div class="loading-text">Loading model...</div>';
+
+    try {
+      const gltf = await fileLoader.loadFromFile(file);
+      model.loadScene(gltf.scene);
+      loading.classList.add('hidden');
+      initializeScene();
+    } catch (err) {
+      console.error('Failed to load model:', err);
+      dropZone.innerHTML = `<div class="drop-icon">⚠️</div><div class="drop-title">Failed to load model</div><div class="drop-sub">${err.message}</div>`;
+    }
+  });
+
+  // Also allow click to select file
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.glb,.gltf';
+  fileInput.style.display = 'none';
+  document.body.appendChild(fileInput);
+
+  dropZone.addEventListener('click', (e) => {
+    if (e.target.id === 'btn-load-demo') return;
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    dropZone.innerHTML = '<div class="loading-text">Loading model...</div>';
+
+    try {
+      const gltf = await fileLoader.loadFromFile(file);
+      model.loadScene(gltf.scene);
+      loading.classList.add('hidden');
+      initializeScene();
+    } catch (err) {
+      console.error('Failed to load model:', err);
+      dropZone.innerHTML = `<div class="drop-icon">⚠️</div><div class="drop-title">Failed to load model</div><div class="drop-sub">${err.message}</div>`;
+    }
+  });
+
+  // ---- Demo button ----
+  document.getElementById('btn-load-demo').addEventListener('click', (e) => {
+    e.stopPropagation();
+    model.buildDemoModel();
+    loading.classList.add('hidden');
+    initializeScene();
+  });
+
+  viewer.start();
+})();
+</script>
+</body>
+</html>
