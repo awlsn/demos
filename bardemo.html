@@ -8,6 +8,253 @@ Sample code:
   "
   readonly
 >
+  // ============================================
+// Permissions Toolbar — Client-side logic
+// Handles impersonation, role switching, and
+// admin panel actions via cookie + page reload.
+// ============================================
+
+const permToolbar = {
+
+  // ---- Cookie helpers ----
+  setCookie(name, value, hours = 1) {
+    const expires = new Date(Date.now() + hours * 3600000).toUTCString();
+    document.cookie = `${name}=${encodeURIComponent(value)}; path=/; expires=${expires}; SameSite=Strict`;
+  },
+
+  deleteCookie(name) {
+    document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC; SameSite=Strict`;
+  },
+
+  getCookie(name) {
+    const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return match ? decodeURIComponent(match[1]) : null;
+  },
+
+  // ---- Role switcher (admin-only testing tool) ----
+  switchRole(roleKey) {
+    if (roleKey === 'clear') {
+      this.deleteCookie('PermToolbar_RoleOverride');
+    } else {
+      this.setCookie('PermToolbar_RoleOverride', roleKey, 2);
+    }
+    location.reload();
+  },
+
+  // ---- Impersonation ----
+  impersonate(userId) {
+    this.setCookie('PermToolbar_Impersonate', userId, 1);
+    location.reload();
+  },
+
+  impersonateFromInput() {
+    const input = document.getElementById('perm-impersonate-input');
+    if (input && input.value) {
+      this.impersonate(input.value);
+    }
+  },
+
+  stopImpersonation() {
+    this.deleteCookie('PermToolbar_Impersonate');
+    this.deleteCookie('PermToolbar_RoleOverride');
+    location.reload();
+  },
+
+  // ---- Admin: user management ----
+  async changeUserRole(selectEl) {
+    const userId = selectEl.dataset.user;
+    const newRole = selectEl.value;
+    try {
+      const response = await fetch('?handler=PermChangeRole', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'RequestVerificationToken': this.getAntiforgeryToken()
+        },
+        body: JSON.stringify({ userId, roleKey: newRole })
+      });
+      if (response.ok) {
+        this.toast('Role updated', 'success');
+      } else {
+        this.toast('Failed to update role', 'danger');
+      }
+    } catch {
+      this.toast('Error updating role', 'danger');
+    }
+  },
+
+  async removeUser(userId) {
+    if (!confirm(`Remove all roles for ${userId}?`)) return;
+    try {
+      const response = await fetch('?handler=PermRemoveUser', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'RequestVerificationToken': this.getAntiforgeryToken()
+        },
+        body: JSON.stringify({ userId })
+      });
+      if (response.ok) {
+        location.reload();
+      } else {
+        this.toast('Failed to remove user', 'danger');
+      }
+    } catch {
+      this.toast('Error removing user', 'danger');
+    }
+  },
+
+  async addUser() {
+    const userInput = document.getElementById('perm-add-user-input');
+    const roleSelect = document.getElementById('perm-add-user-role');
+    if (!userInput?.value) return;
+    try {
+      const response = await fetch('?handler=PermAddUser', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'RequestVerificationToken': this.getAntiforgeryToken()
+        },
+        body: JSON.stringify({ userId: userInput.value, roleKey: roleSelect.value })
+      });
+      if (response.ok) {
+        location.reload();
+      } else {
+        this.toast('Failed to add user', 'danger');
+      }
+    } catch {
+      this.toast('Error adding user', 'danger');
+    }
+  },
+
+  // ---- Admin: permission matrix ----
+  async togglePermission(roleId, permissionId, checkbox) {
+    try {
+      const response = await fetch('?handler=PermTogglePermission', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'RequestVerificationToken': this.getAntiforgeryToken()
+        },
+        body: JSON.stringify({ roleId, permissionId })
+      });
+      if (!response.ok) {
+        checkbox.checked = !checkbox.checked;
+        this.toast('Failed to update', 'danger');
+      }
+    } catch {
+      checkbox.checked = !checkbox.checked;
+      this.toast('Error updating permission', 'danger');
+    }
+  },
+
+  // ---- Admin: delegations ----
+  async createDelegation() {
+    const data = {
+      fromUserId: document.getElementById('perm-deleg-from')?.value,
+      toUserId: document.getElementById('perm-deleg-to')?.value,
+      startDate: document.getElementById('perm-deleg-start')?.value,
+      endDate: document.getElementById('perm-deleg-end')?.value,
+      reason: document.getElementById('perm-deleg-reason')?.value || null
+    };
+    if (!data.fromUserId || !data.toUserId || !data.startDate || !data.endDate) {
+      this.toast('Fill in From, To, and Dates', 'warning');
+      return;
+    }
+    try {
+      const response = await fetch('?handler=PermCreateDelegation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'RequestVerificationToken': this.getAntiforgeryToken()
+        },
+        body: JSON.stringify(data)
+      });
+      if (response.ok) {
+        location.reload();
+      } else {
+        this.toast('Failed to create delegation', 'danger');
+      }
+    } catch {
+      this.toast('Error creating delegation', 'danger');
+    }
+  },
+
+  async revokeDelegation(delegationId) {
+    if (!confirm('Revoke this delegation?')) return;
+    try {
+      const response = await fetch(`?handler=PermRevokeDelegation&delegationId=${delegationId}`, {
+        method: 'POST',
+        headers: {
+          'RequestVerificationToken': this.getAntiforgeryToken()
+        }
+      });
+      if (response.ok) {
+        location.reload();
+      }
+    } catch {
+      this.toast('Error revoking delegation', 'danger');
+    }
+  },
+
+  // ---- Utilities ----
+  getAntiforgeryToken() {
+    const input = document.querySelector('input[name="__RequestVerificationToken"]');
+    return input?.value || '';
+  },
+
+  toast(message, variant = 'primary') {
+    const alert = Object.assign(document.createElement('sl-alert'), {
+      variant,
+      closable: true,
+      duration: 3000,
+      innerHTML: `<sl-icon slot="icon" name="${variant === 'success' ? 'check2-circle' : variant === 'danger' ? 'exclamation-octagon' : 'info-circle'}"></sl-icon>${message}`
+    });
+    document.body.append(alert);
+    alert.toast();
+  },
+
+  // ---- Collapse toggle ----
+  initCollapse() {
+    const toolbar = document.getElementById('perm-toolbar');
+    const btn = document.getElementById('perm-collapse-btn');
+    if (!toolbar || !btn) return;
+
+    // Restore from cookie
+    if (this.getCookie('PermToolbar_Collapsed') === 'true') {
+      toolbar.dataset.collapsed = 'true';
+      btn.name = 'chevron-bar-right';
+    }
+
+    btn.addEventListener('click', () => {
+      const isCollapsed = toolbar.dataset.collapsed === 'true';
+      toolbar.dataset.collapsed = isCollapsed ? 'false' : 'true';
+      btn.name = isCollapsed ? 'chevron-bar-left' : 'chevron-bar-right';
+      this.setCookie('PermToolbar_Collapsed', !isCollapsed ? 'true' : 'false', 24 * 30);
+    });
+  }
+};
+
+// Init on DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => permToolbar.initCollapse());
+} else {
+  permToolbar.initCollapse();
+}
+
+// Make globally available
+window.permToolbar = permToolbar;
+
+</textarea>
+<textarea
+  style="
+    width: 100%;
+    height: 400px;
+    font-family: Consolas, monospace;
+    font-size: 13px;
+  "
+  readonly
+>
     using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Rendering;
@@ -715,3 +962,4 @@ sl-tab-panel {
   --padding: 12px;
 }
 </textarea>
+
