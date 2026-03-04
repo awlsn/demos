@@ -1,0 +1,717 @@
+Sample code:
+<textarea
+  style="
+    width: 100%;
+    height: 400px;
+    font-family: Consolas, monospace;
+    font-size: 13px;
+  "
+  readonly
+>
+    using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using Microsoft.AspNetCore.Razor.TagHelpers;
+using SharedComponents.Permissions.Models;
+using SharedComponents.Permissions.Services;
+
+namespace SharedComponents.Permissions.UI.TagHelpers;
+
+/// <summary>
+/// Renders a permissions toolbar at the top of the page.
+///
+/// Usage in a Razor page:
+///   <permissions-toolbar app-key="HR" />
+///
+/// With options:
+///   <permissions-toolbar app-key="HR" show-admin="true" allow-impersonation="true" />
+///
+/// Requires the PermissionsService to be registered in DI.
+/// Requires Shoelace CSS/JS to be loaded on the page (or use the companion
+/// &lt;permissions-head /&gt; tag helper to inject them automatically).
+/// </summary>
+[HtmlTargetElement("permissions-toolbar", TagStructure = TagStructure.WithoutEndTag)]
+public class PermissionsToolbarTagHelper : TagHelper
+{
+    private readonly PermissionsService _perms;
+    private readonly IHttpContextAccessor _httpContextAccessor;
+
+    [HtmlAttributeName("app-key")]
+    public string AppKey { get; set; } = "";
+
+    [HtmlAttributeName("show-admin")]
+    public bool ShowAdmin { get; set; } = true;
+
+    [HtmlAttributeName("allow-impersonation")]
+    public bool AllowImpersonation { get; set; } = true;
+
+    [HtmlAttributeName("allow-role-switch")]
+    public bool AllowRoleSwitch { get; set; } = true;
+
+    [HtmlAttributeName("collapsed")]
+    public bool StartCollapsed { get; set; } = false;
+
+    [ViewContext]
+    [HtmlAttributeNotBound]
+    public ViewContext ViewContext { get; set; } = null!;
+
+    public PermissionsToolbarTagHelper(PermissionsService perms, IHttpContextAccessor httpContextAccessor)
+    {
+        _perms = perms;
+        _httpContextAccessor = httpContextAccessor;
+    }
+
+    public override async Task ProcessAsync(TagHelperContext context, TagHelperOutput output)
+    {
+        var httpContext = _httpContextAccessor.HttpContext!;
+        var realUserId = ViewContext.HttpContext.User.Identity?.Name ?? "anonymous";
+
+        // Check for impersonation cookie
+        var impersonateUserId = httpContext.Request.Cookies["PermToolbar_Impersonate"];
+        var effectiveUserId = !string.IsNullOrEmpty(impersonateUserId) ? impersonateUserId : realUserId;
+        var isImpersonating = !string.IsNullOrEmpty(impersonateUserId) && impersonateUserId != realUserId;
+
+        // Check for role override cookie (for quick-switch testing)
+        var roleOverride = httpContext.Request.Cookies["PermToolbar_RoleOverride"];
+
+        // Load permission data
+        var userCtx = await _perms.GetUserContextAsync(effectiveUserId);
+        var roles = await _perms.GetRolesAsync();
+        var userRoles = await _perms.GetUserRolesAsync();
+        var delegations = await _perms.GetDelegationsAsync();
+
+        RolePermissionMatrix? matrix = null;
+        if (ShowAdmin && userCtx.IsAdmin)
+        {
+            matrix = await _perms.GetRolePermissionMatrixAsync();
+        }
+
+        // If role override is active, simulate different level
+        var displayCtx = userCtx;
+        if (!string.IsNullOrEmpty(roleOverride) && userCtx.IsAdmin)
+        {
+            var overrideRole = roles.FirstOrDefault(r => r.RoleKey == roleOverride);
+            if (overrideRole != null)
+            {
+                displayCtx = new UserContext
+                {
+                    UserId = userCtx.UserId,
+                    AppKey = userCtx.AppKey,
+                    RoleKey = overrideRole.RoleKey,
+                    Level = overrideRole.Level,
+                    Permissions = userCtx.Permissions,
+                    DelegateFor = userCtx.DelegateFor,
+                    DelegatedLevel = userCtx.DelegatedLevel,
+                    DelegatedPermissions = userCtx.DelegatedPermissions
+                };
+            }
+        }
+
+        // Store context for the page to use
+        httpContext.Items["PermToolbar_UserContext"] = displayCtx;
+        httpContext.Items["PermToolbar_IsImpersonating"] = isImpersonating;
+        httpContext.Items["PermToolbar_RealUser"] = realUserId;
+
+        var appKeyDisplay = string.IsNullOrEmpty(AppKey) ? userCtx.AppKey : AppKey;
+        var badgeVariant = GetBadgeVariant(displayCtx);
+        var roleLabel = displayCtx.IsDelegate && displayCtx.Level < displayCtx.EffectiveLevel
+            ? "Delegate" : displayCtx.RoleKey;
+
+        output.TagName = null;
+        output.Content.SetHtmlContent($@"
+<!-- Permissions Toolbar -->
+<div class=""perm-toolbar sl-theme-dark"" id=""perm-toolbar"" data-app-key=""{Enc(appKeyDisplay)}"" {(StartCollapsed ? @"data-collapsed=""true""" : "")}>
+
+  <!-- Brand -->
+  <div class=""perm-toolbar__brand"">
+    <sl-icon name=""shield-lock"" style=""font-size:16px; color: var(--sl-color-danger-500);""></sl-icon>
+    <span>{Enc(appKeyDisplay)}</span>
+  </div>
+
+  <sl-divider vertical style=""height: 20px; margin: 0 8px;""></sl-divider>
+
+  <!-- Current user + role badge -->
+  <sl-dropdown id=""perm-dd-user"" placement=""bottom-start"">
+    <sl-button slot=""trigger"" size=""small"" variant=""text"" class=""perm-toolbar__user-btn"">
+      <sl-icon slot=""prefix"" name=""person-circle""></sl-icon>
+      <span class=""perm-toolbar__username"">{Enc(displayCtx.UserId)}</span>
+      <sl-badge variant=""{badgeVariant}"" pill>{Enc(roleLabel)}</sl-badge>
+      <sl-badge variant=""neutral"" pill>LVL {displayCtx.EffectiveLevel}</sl-badge>
+    </sl-button>
+
+    <sl-card class=""perm-dropdown-card"" style=""min-width: 340px;"">
+      <div slot=""header"" style=""font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sl-color-neutral-500);"">
+        Current Session
+      </div>
+
+      <div class=""perm-detail-grid"">
+        <div class=""perm-detail-row"">
+          <span class=""perm-detail-label"">Identity</span>
+          <code class=""perm-detail-value"">{Enc(displayCtx.UserId)}</code>
+        </div>
+        <div class=""perm-detail-row"">
+          <span class=""perm-detail-label"">Role</span>
+          <span class=""perm-detail-value"">{Enc(displayCtx.RoleKey)} — Level {displayCtx.Level}</span>
+        </div>
+        {(displayCtx.EffectiveLevel > displayCtx.Level ? $@"
+        <div class=""perm-detail-row"">
+          <span class=""perm-detail-label"">Effective</span>
+          <span class=""perm-detail-value"">Level {displayCtx.EffectiveLevel} <sl-badge variant=""success"" pill>elevated</sl-badge></span>
+        </div>" : "")}
+        {(displayCtx.IsDelegate ? $@"
+        <div class=""perm-detail-row"">
+          <span class=""perm-detail-label"">Covering for</span>
+          <span class=""perm-detail-value"">{Enc(string.Join(", ", displayCtx.DelegateFor))}</span>
+        </div>" : "")}
+      </div>
+
+      <sl-divider></sl-divider>
+      <div style=""font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sl-color-neutral-500); margin-bottom: 8px;"">
+        Effective Permissions
+      </div>
+      <div class=""perm-tag-list"">
+        {string.Join("\n        ", displayCtx.Permissions.Select(p => $@"<sl-tag size=""small"" variant=""success"">{Enc(p)}</sl-tag>"))}
+        {string.Join("\n        ", displayCtx.DelegatedPermissions.Except(displayCtx.Permissions).Select(p => $@"<sl-tag size=""small"" variant=""warning"">{Enc(p)}</sl-tag>"))}
+      </div>
+    </sl-card>
+  </sl-dropdown>
+
+  <sl-divider vertical style=""height: 20px; margin: 0 8px;""></sl-divider>
+
+  <!-- Quick role switcher -->
+  {(AllowRoleSwitch && userCtx.IsAdmin ? RenderRoleSwitcher(roles, displayCtx, roleOverride) : "")}
+
+  <!-- Impersonate -->
+  {(AllowImpersonation && userCtx.IsAdmin ? RenderImpersonateDropdown(isImpersonating, impersonateUserId, userRoles) : "")}
+
+  <div style=""flex: 1;""></div>
+
+  <!-- Admin panel -->
+  {(ShowAdmin && userCtx.IsAdmin ? RenderAdminPanel(roles, userRoles, matrix, delegations) : "")}
+
+  <!-- Collapse toggle -->
+  <sl-divider vertical style=""height: 20px; margin: 0 4px;""></sl-divider>
+  <sl-icon-button name=""chevron-bar-left"" label=""Collapse"" id=""perm-collapse-btn"" style=""font-size: 14px;""></sl-icon-button>
+</div>
+
+<!-- Impersonation banner -->
+{(isImpersonating ? $@"
+<div class=""perm-banner perm-banner--impersonate"" id=""perm-banner-impersonate"">
+  <sl-icon name=""mask"" style=""font-size: 14px;""></sl-icon>
+  <span>Impersonating <strong>{Enc(impersonateUserId!)}</strong></span>
+  <span style=""opacity: 0.5;"">·</span>
+  <span style=""opacity: 0.7;"">Real user: {Enc(realUserId)}</span>
+  <sl-button size=""small"" variant=""text"" style=""color: white;"" onclick=""permToolbar.stopImpersonation()"">
+    <sl-icon slot=""prefix"" name=""x-lg""></sl-icon> Stop
+  </sl-button>
+</div>" : "")}
+
+<!-- Delegate banner -->
+{(displayCtx.IsDelegate ? $@"
+<div class=""perm-banner perm-banner--delegate"" id=""perm-banner-delegate"" style=""top: {(isImpersonating ? "74px" : "42px")};"">
+  <sl-icon name=""people"" style=""font-size: 14px;""></sl-icon>
+  <span>Delegate active — covering for <strong>{Enc(string.Join(", ", displayCtx.DelegateFor))}</strong></span>
+</div>" : "")}
+
+<link rel=""stylesheet"" href=""/_content/SharedComponents.Permissions.UI/permissions/permissions-toolbar.css"" />
+<script src=""/_content/SharedComponents.Permissions.UI/permissions/permissions-toolbar.js"" type=""module""></script>
+");
+    }
+
+    private string RenderRoleSwitcher(List<Role> roles, UserContext ctx, string? roleOverride)
+    {
+        var buttons = string.Join("\n      ", roles.OrderBy(r => r.Level).Select(r =>
+        {
+            var isActive = (!string.IsNullOrEmpty(roleOverride) && roleOverride == r.RoleKey)
+                || (string.IsNullOrEmpty(roleOverride) && r.RoleKey == ctx.RoleKey);
+            var variant = GetBadgeVariant(r.Level);
+            return $@"<sl-button size=""small"" variant=""{(isActive ? variant : "text")}"" pill
+              onclick=""permToolbar.switchRole('{Enc(r.RoleKey)}')"" class=""perm-role-btn""
+              data-role=""{Enc(r.RoleKey)}"">{Enc(r.RoleKey)}</sl-button>";
+        }));
+
+        return $@"
+  <div class=""perm-toolbar__section perm-collapsible"">
+    <sl-button-group label=""Role switcher"">{buttons}</sl-button-group>
+  </div>
+  <sl-divider vertical style=""height: 20px; margin: 0 8px;"" class=""perm-collapsible""></sl-divider>";
+    }
+
+    private string RenderImpersonateDropdown(bool isImpersonating, string? impersonateUserId, List<UserRole> userRoles)
+    {
+        var quickPicks = string.Join("\n          ", userRoles
+            .GroupBy(ur => ur.UserId)
+            .Select(g => g.OrderByDescending(ur => ur.Level).First())
+            .Take(8)
+            .Select(ur =>
+            {
+                var initials = GetInitials(ur.UserId);
+                return $@"
+          <sl-menu-item value=""{Enc(ur.UserId)}"" onclick=""permToolbar.impersonate('{EscJs(ur.UserId)}')"">
+            <sl-avatar slot=""prefix"" initials=""{Enc(initials)}"" style=""--size: 24px;""></sl-avatar>
+            {Enc(ur.UserId)}
+            <sl-badge slot=""suffix"" variant=""{GetBadgeVariant(ur.Level)}"" pill>{Enc(ur.RoleKey)}</sl-badge>
+          </sl-menu-item>";
+            }));
+
+        return $@"
+  <div class=""perm-toolbar__section perm-collapsible"">
+    <sl-dropdown id=""perm-dd-impersonate"" placement=""bottom-start"" stay-open-on-select>
+      <sl-button slot=""trigger"" size=""small"" variant=""text"">
+        <sl-icon slot=""prefix"" name=""mask""></sl-icon>
+        Impersonate
+      </sl-button>
+
+      <sl-card class=""perm-dropdown-card"" style=""min-width: 320px;"">
+        <div slot=""header"" style=""font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sl-color-neutral-500);"">
+          Impersonate User
+        </div>
+
+        <div style=""display: flex; gap: 6px; margin-bottom: 12px;"">
+          <sl-input id=""perm-impersonate-input"" placeholder=""DOMAIN\username"" size=""small"" style=""flex: 1;""
+            clearable></sl-input>
+          <sl-button size=""small"" variant=""danger"" onclick=""permToolbar.impersonateFromInput()"">Go</sl-button>
+        </div>
+
+        <sl-divider></sl-divider>
+        <div style=""font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sl-color-neutral-500); margin-bottom: 8px;"">
+          Quick Pick
+        </div>
+        <sl-menu>
+          {quickPicks}
+        </sl-menu>
+      </sl-card>
+    </sl-dropdown>
+  </div>
+  <sl-divider vertical style=""height: 20px; margin: 0 8px;"" class=""perm-collapsible""></sl-divider>";
+    }
+
+    private string RenderAdminPanel(List<Role> roles, List<UserRole> userRoles, RolePermissionMatrix? matrix, List<Delegation> delegations)
+    {
+        // Users tab
+        var userRows = string.Join("\n              ", userRoles
+            .GroupBy(ur => ur.UserId)
+            .Select(g =>
+            {
+                var ur = g.OrderByDescending(x => x.Level).First();
+                var initials = GetInitials(ur.UserId);
+                var roleOptions = string.Join("", roles.OrderBy(r => r.Level)
+                    .Select(r => $@"<sl-option value=""{Enc(r.RoleKey)}"" {(r.RoleKey == ur.RoleKey ? "selected" : "")}>{Enc(r.Name)}</sl-option>"));
+                return $@"
+              <div class=""perm-user-row"">
+                <sl-avatar initials=""{Enc(initials)}"" style=""--size: 28px;""></sl-avatar>
+                <code style=""flex: 1; font-size: 12px;"">{Enc(ur.UserId)}</code>
+                <sl-select size=""small"" value=""{Enc(ur.RoleKey)}"" style=""min-width: 130px;""
+                  data-user=""{Enc(ur.UserId)}"" hoist
+                  onsl-change=""permToolbar.changeUserRole(this)"">
+                  {roleOptions}
+                </sl-select>
+                <sl-icon-button name=""trash"" label=""Remove"" style=""font-size: 14px; color: var(--sl-color-danger-500);""
+                  onclick=""permToolbar.removeUser('{EscJs(ur.UserId)}')""></sl-icon-button>
+              </div>";
+            }));
+
+        // Matrix tab
+        var matrixHtml = "";
+        if (matrix != null && matrix.Permissions.Count > 0)
+        {
+            var roleHeaders = string.Join("", matrix.Roles.OrderBy(r => r.Level)
+                .Select(r => $@"<th style=""text-align:center; min-width: 80px;"">{Enc(r.Name)}<br><span style=""opacity:0.5; font-weight:400;"">LVL {r.Level}</span></th>"));
+
+            var permRows = string.Join("\n                ", matrix.Permissions.Select(p =>
+            {
+                var checks = string.Join("", matrix.Roles.OrderBy(r => r.Level).Select(r =>
+                {
+                    var isChecked = matrix.IsAssigned(r.RoleId, p.PermissionId);
+                    return $@"<td style=""text-align:center;"">
+                      <sl-checkbox {(isChecked ? "checked" : "")}
+                        onsl-change=""permToolbar.togglePermission({r.RoleId}, {p.PermissionId}, this)""></sl-checkbox>
+                    </td>";
+                }));
+                return $@"<tr>
+                  <td><strong style=""font-size:12px;"">{Enc(p.Name)}</strong><br><code style=""font-size:10px; color: var(--sl-color-neutral-500);"">{Enc(p.PermissionKey)}</code></td>
+                  {checks}
+                </tr>";
+            }));
+
+            matrixHtml = $@"
+            <table class=""perm-matrix"">
+              <thead><tr><th>Permission</th>{roleHeaders}</tr></thead>
+              <tbody>{permRows}</tbody>
+            </table>";
+        }
+        else
+        {
+            matrixHtml = @"
+            <div style=""padding: 16px; text-align: center; color: var(--sl-color-neutral-500); font-size: 13px;"">
+              No fine-grained permissions defined yet.<br>
+              Add rows to the <code>Permissions</code> table when role level alone isn't enough.
+            </div>";
+        }
+
+        // Delegations tab
+        var delegationRows = string.Join("\n            ", delegations.Select(d =>
+        {
+            var isActive = d.IsActive && DateTime.UtcNow >= d.StartDate && DateTime.UtcNow <= d.EndDate;
+            return $@"
+            <div class=""perm-deleg-row"">
+              <div style=""flex: 1;"">
+                <div style=""font-size: 12px;"">{Enc(d.FromUserId)} → {Enc(d.ToUserId)}</div>
+                <div style=""font-size: 11px; color: var(--sl-color-neutral-500);"">{d.StartDate:MMM d} – {d.EndDate:MMM d}{(!string.IsNullOrEmpty(d.Reason) ? $" · {Enc(d.Reason)}" : "")}</div>
+              </div>
+              {(isActive ? @"<sl-badge variant=""success"" pill>Active</sl-badge>" : @"<sl-badge variant=""neutral"" pill>Expired</sl-badge>")}
+              {(d.IsActive ? $@"<sl-icon-button name=""x-circle"" label=""Revoke"" style=""font-size:14px; color: var(--sl-color-danger-500);""
+                onclick=""permToolbar.revokeDelegation({d.DelegationId})""></sl-icon-button>" : "")}
+            </div>";
+        }));
+
+        return $@"
+  <sl-dropdown id=""perm-dd-admin"" placement=""bottom-end"" stay-open-on-select>
+    <sl-button slot=""trigger"" size=""small"" variant=""text"">
+      <sl-icon slot=""prefix"" name=""gear""></sl-icon>
+      Admin
+    </sl-button>
+
+    <sl-card class=""perm-dropdown-card perm-dropdown-card--wide"">
+      <sl-tab-group>
+        <sl-tab slot=""nav"" panel=""users"">Users</sl-tab>
+        <sl-tab slot=""nav"" panel=""matrix"">Matrix</sl-tab>
+        <sl-tab slot=""nav"" panel=""delegations"">Delegations</sl-tab>
+
+        <!-- Users panel -->
+        <sl-tab-panel name=""users"">
+          <div class=""perm-admin-users"">
+            {userRows}
+          </div>
+          <sl-divider></sl-divider>
+          <div style=""display: flex; gap: 6px; padding: 0 4px;"">
+            <sl-input id=""perm-add-user-input"" placeholder=""DOMAIN\username"" size=""small"" style=""flex:1;""></sl-input>
+            <sl-select id=""perm-add-user-role"" size=""small"" value=""{Enc(roles.OrderBy(r => r.Level).First().RoleKey)}"" style=""min-width: 120px;"" hoist>
+              {string.Join("", roles.OrderBy(r => r.Level).Select(r => $@"<sl-option value=""{Enc(r.RoleKey)}"">{Enc(r.Name)}</sl-option>"))}
+            </sl-select>
+            <sl-button size=""small"" variant=""primary"" onclick=""permToolbar.addUser()"">
+              <sl-icon slot=""prefix"" name=""plus-lg""></sl-icon> Add
+            </sl-button>
+          </div>
+        </sl-tab-panel>
+
+        <!-- Matrix panel -->
+        <sl-tab-panel name=""matrix"">
+          {matrixHtml}
+        </sl-tab-panel>
+
+        <!-- Delegations panel -->
+        <sl-tab-panel name=""delegations"">
+          <div class=""perm-admin-delegations"">
+            {(delegations.Count > 0 ? delegationRows : @"<div style=""padding: 8px; text-align: center; color: var(--sl-color-neutral-500); font-size: 12px;"">No delegations</div>")}
+          </div>
+          <sl-divider></sl-divider>
+          <div style=""font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sl-color-neutral-500); margin-bottom: 8px;"">New Delegation</div>
+          <div class=""perm-deleg-form"">
+            <div class=""perm-deleg-form__row"">
+              <label>From</label>
+              <sl-input id=""perm-deleg-from"" size=""small"" placeholder=""DOMAIN\username"" style=""flex:1;""></sl-input>
+            </div>
+            <div class=""perm-deleg-form__row"">
+              <label>To</label>
+              <sl-input id=""perm-deleg-to"" size=""small"" placeholder=""DOMAIN\username"" style=""flex:1;""></sl-input>
+            </div>
+            <div class=""perm-deleg-form__row"">
+              <label>Dates</label>
+              <sl-input id=""perm-deleg-start"" type=""date"" size=""small"" style=""flex:1;""></sl-input>
+              <span style=""color: var(--sl-color-neutral-500); font-size: 11px;"">to</span>
+              <sl-input id=""perm-deleg-end"" type=""date"" size=""small"" style=""flex:1;""></sl-input>
+            </div>
+            <div class=""perm-deleg-form__row"">
+              <label>Reason</label>
+              <sl-input id=""perm-deleg-reason"" size=""small"" placeholder=""Optional"" style=""flex:1;""></sl-input>
+            </div>
+            <div style=""text-align: right; padding-top: 4px;"">
+              <sl-button size=""small"" variant=""primary"" onclick=""permToolbar.createDelegation()"">
+                <sl-icon slot=""prefix"" name=""plus-lg""></sl-icon> Create
+              </sl-button>
+            </div>
+          </div>
+        </sl-tab-panel>
+      </sl-tab-group>
+    </sl-card>
+  </sl-dropdown>";
+    }
+
+    // ---- Helpers ----
+
+    private static string GetBadgeVariant(UserContext ctx)
+        => GetBadgeVariant(ctx.EffectiveLevel);
+
+    private static string GetBadgeVariant(int level) => level switch
+    {
+        >= 100 => "danger",
+        >= 50 => "warning",
+        _ => "neutral"
+    };
+
+    private static string GetInitials(string userId)
+    {
+        var name = userId.Contains('\\') ? userId.Split('\\').Last() : userId;
+        return name.Length >= 2 ? name[..2].ToUpper() : name.ToUpper();
+    }
+
+    private static string Enc(string value) => HtmlEncoder.Default.Encode(value);
+    private static string EscJs(string value) => JavaScriptEncoder.Default.Encode(value);
+}
+
+</textarea>
+
+<textarea
+  style="
+    width: 100%;
+    height: 200px;
+    font-family: Consolas, monospace;
+    font-size: 13px;
+  "
+  readonly
+>
+/* ============================================
+   Permissions Toolbar — Styles
+   Uses Shoelace CSS custom properties where possible.
+   ============================================ */
+
+.perm-toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  height: 42px;
+  background: var(--sl-color-neutral-50);
+  border-bottom: 1px solid var(--sl-color-neutral-200);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 2px;
+  font-family: var(--sl-font-sans);
+  font-size: var(--sl-font-size-small);
+  box-shadow: var(--sl-shadow-medium);
+}
+
+/* Dark theme override */
+.perm-toolbar.sl-theme-dark {
+  background: var(--sl-color-neutral-0);
+  border-bottom-color: var(--sl-color-neutral-200);
+}
+
+/* Brand section */
+.perm-toolbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: var(--sl-font-size-x-small);
+  font-weight: var(--sl-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sl-color-neutral-500);
+  user-select: none;
+}
+
+/* User button tweaks */
+.perm-toolbar__user-btn::part(base) {
+  gap: 6px;
+}
+
+.perm-toolbar__username {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-font-size-x-small);
+}
+
+/* Toolbar sections */
+.perm-toolbar__section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Collapse behavior */
+.perm-toolbar[data-collapsed="true"] .perm-collapsible {
+  display: none;
+}
+
+/* Dropdown card */
+.perm-dropdown-card {
+  --padding: 16px;
+}
+
+.perm-dropdown-card--wide {
+  min-width: 520px;
+}
+
+.perm-dropdown-card [slot="header"] {
+  padding: 12px 16px 8px;
+}
+
+/* Detail grid in user dropdown */
+.perm-detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.perm-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--sl-font-size-small);
+}
+
+.perm-detail-label {
+  min-width: 80px;
+  color: var(--sl-color-neutral-500);
+  font-size: var(--sl-font-size-x-small);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: var(--sl-font-weight-semibold);
+}
+
+.perm-detail-value {
+  font-size: var(--sl-font-size-small);
+}
+
+/* Permission tag list */
+.perm-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.perm-tag-list sl-tag::part(base) {
+  font-size: 11px;
+  height: 22px;
+}
+
+/* User rows in admin panel */
+.perm-admin-users {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.perm-user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--sl-border-radius-medium);
+  transition: background 0.12s;
+}
+
+.perm-user-row:hover {
+  background: var(--sl-color-neutral-100);
+}
+
+/* Matrix table */
+.perm-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--sl-font-size-small);
+}
+
+.perm-matrix th {
+  padding: 8px;
+  text-align: left;
+  font-size: var(--sl-font-size-x-small);
+  font-weight: var(--sl-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sl-color-neutral-500);
+  border-bottom: 1px solid var(--sl-color-neutral-200);
+}
+
+.perm-matrix td {
+  padding: 8px;
+  border-bottom: 1px solid var(--sl-color-neutral-100);
+}
+
+/* Delegation rows */
+.perm-admin-delegations {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.perm-deleg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--sl-border-radius-medium);
+  transition: background 0.12s;
+}
+
+.perm-deleg-row:hover {
+  background: var(--sl-color-neutral-100);
+}
+
+/* Delegation form */
+.perm-deleg-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.perm-deleg-form__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perm-deleg-form label {
+  min-width: 50px;
+  font-size: var(--sl-font-size-x-small);
+  color: var(--sl-color-neutral-500);
+  font-weight: var(--sl-font-weight-semibold);
+}
+
+/* Banners */
+.perm-banner {
+  position: fixed;
+  top: 42px;
+  left: 0;
+  right: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--sl-font-sans);
+  font-size: var(--sl-font-size-small);
+  font-weight: var(--sl-font-weight-semibold);
+  color: white;
+  z-index: 9998;
+}
+
+.perm-banner--impersonate {
+  background: linear-gradient(90deg, var(--sl-color-danger-600), var(--sl-color-danger-700));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.2);
+}
+
+.perm-banner--delegate {
+  background: linear-gradient(90deg, var(--sl-color-success-700), var(--sl-color-success-600));
+  z-index: 9997;
+}
+
+/* Role switcher button group tweaks */
+.perm-role-btn::part(base) {
+  font-size: var(--sl-font-size-x-small);
+}
+
+/* Ensure tab panels in admin dropdown don't get too tall */
+sl-tab-panel {
+  --padding: 12px;
+}
+</textarea>
