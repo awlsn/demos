@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intranet Layout Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/dark.css" />
+<script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
+
+<style>
+  /* ─── Reset & Base ────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --brand:       #1a1f2e;
+    --brand-mid:   #242b3d;
+    --brand-light: #2e3650;
+    --accent:      #4f9cf9;
+    --accent-soft: rgba(79,156,249,0.15);
+    --text:        #e8eaf0;
+    --text-muted:  rgba(232,234,240,0.5);
+    --border:      rgba(255,255,255,0.07);
+    --topbar-h:    52px;
+    --radius:      8px;
+    --shadow:      0 4px 24px rgba(0,0,0,0.35);
+    --transition-pulse: transform 0.15s ease-out;
+    --transition-pulse-out: transform 0.7s ease-in-out;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--brand);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ─── Top Bar ─────────────────────────────────────── */
+  .topbar {
+    height: var(--topbar-h);
+    background: var(--brand-mid);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 12px;
+    flex-shrink: 0;
+    z-index: 100;
+    box-shadow: 0 1px 12px rgba(0,0,0,0.2);
+  }
+
+  .topbar-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    flex-shrink: 0;
+  }
+
+  /* ── Pulse on hover ── */
+  .topbar-logo sl-icon,
+  .topbar-logo .logo-text {
+    transition: var(--transition-pulse-out); /* slow return */
+    display: inline-block;
+  }
+  .topbar-logo:hover sl-icon,
+  .topbar-logo:hover .logo-text {
+    transform: scale(1.07);
+    transition: var(--transition-pulse); /* fast grow */
+  }
+
+  .logo-text {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+  }
+
+  .logo-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+
+  .topbar-spacer { flex: 1; }
+
+  /* ── App bar action buttons ── */
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .topbar-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: var(--radius);
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: background 0.2s, color 0.2s;
+  }
+  .topbar-btn:hover { background: var(--brand-light); color: var(--text); }
+
+  .topbar-btn sl-icon {
+    font-size: 18px;
+    transition: var(--transition-pulse-out);
+  }
+  .topbar-btn:hover sl-icon {
+    transform: scale(1.1);
+    transition: var(--transition-pulse);
+  }
+
+  /* Notification badge */
+  .topbar-btn .badge {
+    position: absolute;
+    top: 5px; right: 5px;
+    width: 7px; height: 7px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: 1.5px solid var(--brand-mid);
+  }
+
+  .topbar-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--brand-light);
+    border: 1.5px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-left: 4px;
+    transition: var(--transition-pulse-out);
+    flex-shrink: 0;
+  }
+  .topbar-avatar:hover {
+    transform: scale(1.1);
+    transition: var(--transition-pulse);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  /* ─── Layout Toggle (Demo UI) ─────────────────────── */
+  .demo-toggle {
+    display: flex;
+    gap: 6px;
+    background: var(--brand);
+    border-radius: var(--radius);
+    padding: 3px;
+    margin-left: 8px;
+    border: 1px solid var(--border);
+  }
+  .demo-toggle button {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+  }
+  .demo-toggle button.active {
+    background: var(--brand-light);
+    color: var(--text);
+  }
+
+  /* ─── Page Body (below topbar) ────────────────────── */
+  .page-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    position: relative;
+  }
+
+  /* ── Full-bleed Application Layout ── */
+  .layout-app {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  .layout-app .app-sidebar {
+    width: 220px;
+    background: var(--brand-mid);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 12px 8px;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  .sidebar-section-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 10px 8px 4px;
+  }
+
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13.5px;
+    color: var(--text-muted);
+    transition: background 0.15s, color 0.15s;
+    border: none;
+    background: transparent;
+    width: 100%;
+    text-align: left;
+  }
+  .sidebar-item:hover { background: var(--brand-light); color: var(--text); }
+  .sidebar-item.active { background: var(--accent-soft); color: var(--accent); }
+  .sidebar-item sl-icon { font-size: 16px; flex-shrink: 0;
+    transition: var(--transition-pulse-out);
+  }
+  .sidebar-item:hover sl-icon {
+    transform: scale(1.1);
+    transition: var(--transition-pulse);
+  }
+
+  .layout-app .app-main {
+    flex: 1;
+    overflow: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .app-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .app-toolbar h1 {
+    font-size: 17px;
+    font-weight: 600;
+    flex: 1;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.15s, transform 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: var(--brand-light); color: var(--text); }
+
+  .app-canvas {
+    flex: 1;
+    background: var(--brand-mid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .app-canvas::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(rgba(79,156,249,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(79,156,249,0.03) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* ── Max-width List Layout ── */
+  .layout-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .list-container {
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .list-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .list-header h1 { font-size: 20px; font-weight: 600; }
+  .list-header .count {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: 'DM Mono', monospace;
+  }
+
+  .list-filters {
+    display: flex;
+    gap: 6px;
+  }
+  .filter-chip {
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--brand-light);
+    color: var(--text-muted);
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background 0.15s, color 0.15s;
+  }
+  .filter-chip.active, .filter-chip:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: rgba(79,156,249,0.3);
+  }
+
+  .review-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .review-card {
+    background: var(--brand-mid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+  .review-card:hover {
+    background: var(--brand-light);
+    border-color: rgba(79,156,249,0.25);
+    transform: translateX(2px);
+  }
+
+  .review-card-icon {
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    color: var(--accent);
+    transition: var(--transition-pulse-out);
+  }
+  .review-card:hover .review-card-icon {
+    transform: scale(1.1);
+    transition: var(--transition-pulse);
+  }
+
+  .review-card-body { flex: 1; min-width: 0; }
+  .review-card-title {
+    font-size: 13.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .review-card-meta {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .review-card-status {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 9px;
+    border-radius: 999px;
+    flex-shrink: 0;
+  }
+  .status-pending { background: rgba(255,183,77,0.12); color: #ffb74d; }
+  .status-complete { background: rgba(76,175,80,0.12); color: #66bb6a; }
+  .status-review { background: rgba(79,156,249,0.12); color: var(--accent); }
+
+  .review-card-arrow { color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
+
+  /* ─── Transitions between layouts ─────────────────── */
+  .layout-app, .layout-list {
+    position: absolute;
+    inset: 0;
+    transition: opacity 0.25s, transform 0.25s;
+  }
+  .layout-app { display: flex; }
+  .layout-list { display: flex; }
+
+  .page-body.show-list .layout-app  { opacity: 0; pointer-events: none; transform: translateY(6px); }
+  .page-body.show-list .layout-list { opacity: 1; pointer-events: auto; transform: none; }
+  .page-body.show-app  .layout-app  { opacity: 1; pointer-events: auto; transform: none; }
+  .page-body.show-app  .layout-list { opacity: 0; pointer-events: none; transform: translateY(6px); }
+
+  /* ─── Scrollbar ───────────────────────────────────── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--brand-light); border-radius: 99px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ TOP BAR ═══════════════ -->
+<header class="topbar">
+  <a href="#" class="topbar-logo">
+    <sl-icon name="layers" style="font-size:22px; color: var(--accent);"></sl-icon>
+    <span class="logo-text">Nexus</span>
+  </a>
+
+  <div class="logo-divider"></div>
+
+  <!-- Demo layout switcher — in real app this would just be page navigation -->
+  <div class="demo-toggle">
+    <button id="btn-app"  class="active"  onclick="setLayout('app')">App view</button>
+    <button id="btn-list"               onclick="setLayout('list')">List view</button>
+  </div>
+
+  <div class="topbar-spacer"></div>
+
+  <nav class="topbar-actions">
+    <button class="topbar-btn" title="Search">
+      <sl-icon name="search"></sl-icon>
+    </button>
+    <button class="topbar-btn" title="Notifications">
+      <sl-icon name="bell"></sl-icon>
+      <span class="badge"></span>
+    </button>
+    <button class="topbar-btn" title="Help">
+      <sl-icon name="question-circle"></sl-icon>
+    </button>
+    <button class="topbar-btn" title="Settings">
+      <sl-icon name="gear"></sl-icon>
+    </button>
+    <div class="topbar-avatar" title="Your account">JD</div>
+  </nav>
+</header>
+
+<!-- ═══════════════ PAGE BODY ═══════════════ -->
+<div class="page-body show-app" id="pageBody">
+
+  <!-- ── Full-bleed Application Layout ── -->
+  <div class="layout-app">
+    <aside class="app-sidebar">
+      <span class="sidebar-section-label">Workspace</span>
+      <button class="sidebar-item active">
+        <sl-icon name="grid"></sl-icon> Dashboard
+      </button>
+      <button class="sidebar-item">
+        <sl-icon name="file-earmark-text"></sl-icon> Reviews
+      </button>
+      <button class="sidebar-item">
+        <sl-icon name="people"></sl-icon> Team
+      </button>
+
+      <span class="sidebar-section-label" style="margin-top:8px">Tools</span>
+      <button class="sidebar-item">
+        <sl-icon name="graph-up"></sl-icon> Analytics
+      </button>
+      <button class="sidebar-item">
+        <sl-icon name="archive"></sl-icon> Archive
+      </button>
+    </aside>
+
+    <main class="app-main">
+      <div class="app-toolbar">
+        <h1>Review Editor</h1>
+        <button class="btn btn-ghost">
+          <sl-icon name="arrow-left"></sl-icon> Back
+        </button>
+        <button class="btn btn-primary">
+          <sl-icon name="check-lg"></sl-icon> Publish
+        </button>
+      </div>
+
+      <div class="app-canvas">
+        <span style="position:relative;z-index:1">Application content fills this area</span>
+      </div>
+    </main>
+  </div>
+
+  <!-- ── Max-width List Layout ── -->
+  <div class="layout-list">
+    <div class="list-container">
+      <div class="list-header">
+        <h1>Reviews</h1>
+        <span class="count">12 items</span>
+      </div>
+
+      <div class="list-filters">
+        <span class="filter-chip active">All</span>
+        <span class="filter-chip">Pending</span>
+        <span class="filter-chip">In Review</span>
+        <span class="filter-chip">Complete</span>
+      </div>
+
+      <div class="review-list">
+        <!-- Cards -->
+        <div class="review-card"><div class="review-card-icon"><sl-icon name="file-earmark-text"></sl-icon></div><div class="review-card-body"><div class="review-card-title">Q3 Performance Report — Engineering</div><div class="review-card-meta">Updated 2 hours ago · Sarah M.</div></div><span class="review-card-status status-pending">Pending</span><sl-icon class="review-card-arrow" name="chevron-right"></sl-icon></div>
+
+        <div class="review-card"><div class="review-card-icon"><sl-icon name="file-earmark-text"></sl-icon></div><div class="review-card-body"><div class="review-card-title">Annual Compliance Audit 2024</div><div class="review-card-meta">Updated yesterday · Tom R.</div></div><span class="review-card-status status-review">In Review</span><sl-icon class="review-card-arrow" name="chevron-right"></sl-icon></div>
+
+        <div class="review-card"><div class="review-card-icon"><sl-icon name="file-earmark-text"></sl-icon></div><div class="review-card-body"><div class="review-card-title">Product Roadmap H1 2025</div><div class="review-card-meta">Updated 3 days ago · Priya K.</div></div><span class="review-card-status status-complete">Complete</span><sl-icon class="review-card-arrow" name="chevron-right"></sl-icon></div>
+
+        <div class="review-card"><div class="review-card-icon"><sl-icon name="file-earmark-text"></sl-icon></div><div class="review-card-body"><div class="review-card-title">Infrastructure Security Policy</div><div class="review-card-meta">Updated 5 days ago · Alex B.</div></div><span class="review-card-status status-pending">Pending</span><sl-icon class="review-card-arrow" name="chevron-right"></sl-icon></div>
+
+        <div class="review-card"><div class="review-card-icon"><sl-icon name="file-earmark-text"></sl-icon></div><div class="review-card-body"><div class="review-card-title">Vendor Contract — Cloud Services</div><div class="review-card-meta">Updated last week · Dana L.</div></div><span class="review-card-status status-review">In Review</span><sl-icon class="review-card-arrow" name="chevron-right"></sl-icon></div>
+
+        <div class="review-card"><div class="review-card-icon"><sl-icon name="file-earmark-text"></sl-icon></div><div class="review-card-body"><div class="review-card-title">HR Onboarding Process Update</div><div class="review-card-meta">Updated 2 weeks ago · Chris W.</div></div><span class="review-card-status status-complete">Complete</span><sl-icon class="review-card-arrow" name="chevron-right"></sl-icon></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function setLayout(mode) {
+    const body = document.getElementById('pageBody');
+    body.className = 'page-body show-' + mode;
+    document.getElementById('btn-app').className  = mode === 'app'  ? 'active' : '';
+    document.getElementById('btn-list').className = mode === 'list' ? 'active' : '';
+  }
+</script>
+
+</body>
+</html>
