@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>light-dark() + View Transitions</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+
+        --bg: light-dark(#f5f0e8, #1a1a2e);
+        --surface: light-dark(#ffffff, #16213e);
+        --text: light-dark(#1a1a2e, #e8e4d9);
+        --muted: light-dark(#6b6560, #9a9490);
+        --accent: light-dark(#c4622d, #e8845a);
+        --border: light-dark(#ddd8d0, #2a2a4a);
+        --shadow: light-dark(rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.4));
+      }
+
+      /* View Transition: cross-fade the entire page */
+      ::view-transition-old(root),
+      ::view-transition-new(root) {
+        animation-duration: 0.8s;
+        animation-timing-function: ease-in-out;
+      }
+
+      /* Clip-reveal from the toggle button outward */
+      @keyframes reveal {
+        from {
+          clip-path: circle(0% at var(--cx) var(--cy));
+        }
+        to {
+          clip-path: circle(150% at var(--cx) var(--cy));
+        }
+      }
+
+      ::view-transition-new(root) {
+        animation-name: reveal;
+      }
+
+      ::view-transition-old(root) {
+        animation: none;
+        z-index: -1;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Georgia', serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        transition: background 0s; /* VT handles this */
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 2.5rem;
+        max-width: 420px;
+        width: 90%;
+        box-shadow: 0 8px 32px var(--shadow);
+      }
+
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+      }
+
+      h1 {
+        font-size: 1.3rem;
+        font-weight: normal;
+        letter-spacing: -0.02em;
+      }
+
+      .toggle {
+        background: var(--border);
+        border: none;
+        border-radius: 50px;
+        width: 52px;
+        height: 28px;
+        cursor: pointer;
+        position: relative;
+        transition: background 0.2s;
+      }
+
+      .toggle::after {
+        content: '';
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--accent);
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+
+      :root.dark .toggle::after {
+        transform: translateX(24px);
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+        font-size: 0.95rem;
+        margin-bottom: 1.25rem;
+      }
+
+      .tag {
+        display: inline-block;
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+        color: var(--accent);
+        border-radius: 6px;
+        padding: 0.2em 0.6em;
+        font-size: 0.8rem;
+        font-family: monospace;
+        margin: 0.2em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="card-header">
+        <h1>Theme Demo</h1>
+        <button class="toggle" id="toggle" aria-label="Toggle theme"></button>
+      </div>
+      <p>
+        Colors are defined once using <span class="tag">light-dark()</span>, and
+        the browser picks the right value based on
+        <span class="tag">color-scheme</span>.
+      </p>
+      <p>
+        Clicking the toggle uses the
+        <span class="tag">View Transitions API</span> — the new theme does a
+        circular reveal from where you clicked.
+      </p>
+    </div>
+
+    <script>
+      const root = document.documentElement;
+      const toggle = document.getElementById('toggle');
+
+      // Start in system preference
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        root.classList.add('dark');
+        root.style.colorScheme = 'dark';
+      }
+
+      toggle.addEventListener('click', (e) => {
+        // Store click position as CSS vars for the clip-path origin
+        const x = e.clientX;
+        const y = e.clientY;
+        root.style.setProperty('--cx', x + 'px');
+        root.style.setProperty('--cy', y + 'px');
+
+        const isDark = root.classList.contains('dark');
+
+        if (!document.startViewTransition) {
+          // Fallback: no VT support
+          applyTheme(!isDark);
+          return;
+        }
+
+        document.startViewTransition(() => {
+          applyTheme(!isDark);
+        });
+      });
+
+      function applyTheme(dark) {
+        root.classList.toggle('dark', dark);
+        root.style.colorScheme = dark ? 'dark' : 'light';
+      }
+    </script>
+  </body>
+</html>
