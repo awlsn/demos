@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intranet — Page Transition Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy:   #0f2044;
+    --blue:   #1a5fa8;
+    --sky:    #e8f0fb;
+    --accent: #c8382a;
+    --text:   #1c1c2e;
+    --muted:  #6b7280;
+    --border: #dce3ee;
+    --white:  #ffffff;
+    --radius: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: #f0f4f9;
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── View Transition Styles ───────────────────────── */
+
+  /* The main content area gets a named view-transition */
+  #page-content {
+    view-transition-name: main-content;
+  }
+
+  /* Slide in from right */
+  @keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(40px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  @keyframes slide-out-left {
+    from { opacity: 1; transform: translateX(0); }
+    to   { opacity: 0; transform: translateX(-30px); }
+  }
+
+  /* The nav badge gets its own transition */
+  #active-badge {
+    view-transition-name: active-badge;
+  }
+
+  ::view-transition-old(main-content) {
+    animation: 280ms ease-in slide-out-left;
+  }
+
+  ::view-transition-new(main-content) {
+    animation: 320ms ease-out slide-in-right;
+  }
+
+  /* Badge cross-fades smoothly */
+  ::view-transition-old(active-badge),
+  ::view-transition-new(active-badge) {
+    animation-duration: 200ms;
+  }
+
+  /* ── Shell ────────────────────────────────────────── */
+
+  header {
+    background: var(--navy);
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 0 2rem;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+
+  .logo {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.15rem;
+    letter-spacing: 0.01em;
+    color: white;
+    white-space: nowrap;
+  }
+
+  .logo span {
+    color: #7fb3f5;
+  }
+
+  nav {
+    display: flex;
+    gap: 0.25rem;
+    margin-left: 1rem;
+  }
+
+  nav button {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.65);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.875rem;
+    font-weight: 400;
+    padding: 0.4rem 0.85rem;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  nav button:hover {
+    background: rgba(255,255,255,0.1);
+    color: white;
+  }
+
+  nav button.active {
+    background: rgba(255,255,255,0.15);
+    color: white;
+    font-weight: 500;
+  }
+
+  .header-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .user-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.7);
+  }
+
+  .avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--blue);
+    border: 2px solid rgba(255,255,255,0.3);
+    display: grid;
+    place-items: center;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: white;
+  }
+
+  /* ── Layout ───────────────────────────────────────── */
+
+  .shell {
+    display: flex;
+    flex: 1;
+  }
+
+  aside {
+    width: 220px;
+    background: var(--white);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 0.75rem;
+    flex-shrink: 0;
+  }
+
+  .aside-section {
+    margin-bottom: 1.5rem;
+  }
+
+  .aside-label {
+    font-size: 0.68rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding: 0 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .aside-link {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    color: var(--text);
+    cursor: pointer;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    transition: background 0.12s;
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  .aside-link:hover { background: var(--sky); }
+  .aside-link.active {
+    background: var(--sky);
+    color: var(--blue);
+    font-weight: 500;
+  }
+
+  .aside-icon {
+    width: 16px;
+    opacity: 0.6;
+    flex-shrink: 0;
+  }
+
+  .aside-link.active .aside-icon { opacity: 1; }
+
+  main {
+    flex: 1;
+    padding: 2rem 2.5rem;
+    overflow-y: auto;
+  }
+
+  /* ── Page Content Styles ──────────────────────────── */
+
+  #page-content {
+    max-width: 900px;
+  }
+
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 1.75rem;
+    gap: 1rem;
+  }
+
+  .page-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.8rem;
+    color: var(--navy);
+    line-height: 1.2;
+  }
+
+  .page-subtitle {
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin-top: 0.25rem;
+  }
+
+  #active-badge {
+    background: var(--sky);
+    color: var(--blue);
+    border: 1px solid #b8d0f0;
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.3em 0.75em;
+    border-radius: 20px;
+    white-space: nowrap;
+    margin-top: 0.25rem;
+  }
+
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+  }
+
+  .card-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .card-value {
+    font-size: 2rem;
+    font-family: 'DM Serif Display', serif;
+    color: var(--navy);
+    line-height: 1;
+  }
+
+  .card-delta {
+    font-size: 0.8rem;
+    color: #2a7a4b;
+    margin-top: 0.35rem;
+  }
+
+  .card-delta.down { color: var(--accent); }
+
+  .section-title {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    font-size: 0.875rem;
+  }
+
+  th {
+    background: #f7f9fc;
+    text-align: left;
+    padding: 0.65rem 1rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    font-weight: 500;
+  }
+
+  td {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafbfd; }
+
+  .status {
+    display: inline-block;
+    padding: 0.15em 0.6em;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .status.open   { background: #e6f4ea; color: #2a7a4b; }
+  .status.review { background: #fff4e5; color: #b45309; }
+  .status.closed { background: #f0f0f0; color: #555; }
+
+  .prose p {
+    line-height: 1.7;
+    color: #374151;
+    margin-bottom: 1rem;
+    font-size: 0.925rem;
+  }
+
+  .notice {
+    background: var(--sky);
+    border-left: 3px solid var(--blue);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 0.85rem 1.1rem;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+    color: #1a3a6b;
+  }
+
+  .notice strong { display: block; margin-bottom: 0.2rem; }
+
+  .form-row { margin-bottom: 1rem; }
+
+  .form-row label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--muted);
+    margin-bottom: 0.3rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .form-row input, .form-row select, .form-row textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.6rem 0.8rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.9rem;
+    color: var(--text);
+    background: var(--white);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .form-row input:focus, .form-row select:focus, .form-row textarea:focus {
+    border-color: var(--blue);
+  }
+
+  .btn {
+    display: inline-block;
+    background: var(--blue);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0.6rem 1.4rem;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .btn:hover { background: #154d8a; }
+
+  .tip {
+    margin-top: 2.5rem;
+    padding: 1rem 1.25rem;
+    background: #fffbea;
+    border: 1px solid #f0d080;
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+    color: #7a5c00;
+  }
+
+  .tip strong { display: block; margin-bottom: 0.2rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Contoso <span>Intranet</span></div>
+  <nav id="top-nav">
+    <button onclick="navigate('dashboard')" class="active" data-page="dashboard">Dashboard</button>
+    <button onclick="navigate('projects')" data-page="projects">Projects</button>
+    <button onclick="navigate('announcements')" data-page="announcements">Announcements</button>
+    <button onclick="navigate('submit')" data-page="submit">Submit Request</button>
+  </nav>
+  <div class="header-right">
+    <div class="user-chip">
+      <div class="avatar">JD</div>
+      J. Doe
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <div class="aside-section">
+      <div class="aside-label">Main</div>
+      <button class="aside-link active" onclick="navigate('dashboard')" data-page="dashboard">
+        <svg class="aside-icon" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+        Dashboard
+      </button>
+      <button class="aside-link" onclick="navigate('projects')" data-page="projects">
+        <svg class="aside-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3zm2 1v8h8V4H4z"/></svg>
+        Projects
+      </button>
+      <button class="aside-link" onclick="navigate('announcements')" data-page="announcements">
+        <svg class="aside-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 3a1 1 0 011 1v3a1 1 0 01-2 0V5a1 1 0 011-1zm0 7a1 1 0 100-2 1 1 0 000 2z"/></svg>
+        Announcements
+      </button>
+      <button class="aside-link" onclick="navigate('submit')" data-page="submit">
+        <svg class="aside-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Submit Request
+      </button>
+    </div>
+  </aside>
+
+  <main>
+    <div id="page-content">
+      <!-- injected by JS -->
+    </div>
+
+    <div class="tip">
+      <strong>👆 How this demo works</strong>
+      Click any nav item above or in the sidebar. The content slides in using <code>startViewTransition()</code> — in a real Razor Pages site, this happens automatically between page loads with just <code>@view-transition { navigation: auto; }</code> in your CSS.
+    </div>
+  </main>
+</div>
+
+<script>
+const pages = {
+  dashboard: {
+    badge: 'Overview',
+    title: 'Good morning, Jane.',
+    subtitle: 'Here\'s what\'s happening across your organisation today.',
+    render: () => `
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-label">Open Tickets</div>
+          <div class="card-value">34</div>
+          <div class="card-delta">↑ 4 since yesterday</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Active Projects</div>
+          <div class="card-value">12</div>
+          <div class="card-delta">2 due this week</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Pending Approvals</div>
+          <div class="card-value">7</div>
+          <div class="card-delta down">↑ 3 awaiting you</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Team Members</div>
+          <div class="card-value">48</div>
+          <div class="card-delta">3 on leave today</div>
+        </div>
+      </div>
+      <div class="section-title">Recent Activity</div>
+      <table>
+        <thead><tr><th>Item</th><th>Updated By</th><th>Time</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Q4 Budget Review</td><td>M. Patel</td><td>09:14</td><td><span class="status review">In Review</span></td></tr>
+          <tr><td>Office 365 Migration</td><td>T. Nguyen</td><td>08:51</td><td><span class="status open">Open</span></td></tr>
+          <tr><td>HR Policy Update v3</td><td>S. Clark</td><td>Yesterday</td><td><span class="status closed">Closed</span></td></tr>
+          <tr><td>Server Maintenance Window</td><td>R. Evans</td><td>Yesterday</td><td><span class="status open">Open</span></td></tr>
+          <tr><td>Supplier Contract Renewal</td><td>A. Brooks</td><td>Mon</td><td><span class="status closed">Closed</span></td></tr>
+        </tbody>
+      </table>
+    `
+  },
+
+  projects: {
+    badge: 'Projects',
+    title: 'Active Projects',
+    subtitle: 'Tracking 12 projects across 4 departments.',
+    render: () => `
+      <table>
+        <thead><tr><th>Project</th><th>Owner</th><th>Department</th><th>Due</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Office 365 Migration</td><td>T. Nguyen</td><td>IT</td><td>15 Mar</td><td><span class="status open">On Track</span></td></tr>
+          <tr><td>Q4 Budget Review</td><td>M. Patel</td><td>Finance</td><td>22 Mar</td><td><span class="status review">At Risk</span></td></tr>
+          <tr><td>New Hire Onboarding Portal</td><td>S. Clark</td><td>HR</td><td>1 Apr</td><td><span class="status open">On Track</span></td></tr>
+          <tr><td>CRM Data Cleanse</td><td>J. Doe</td><td>Sales</td><td>5 Apr</td><td><span class="status open">On Track</span></td></tr>
+          <tr><td>Supplier Portal Upgrade</td><td>A. Brooks</td><td>Ops</td><td>12 Apr</td><td><span class="status review">In Review</span></td></tr>
+          <tr><td>Intranet Redesign</td><td>R. Evans</td><td>IT</td><td>30 Apr</td><td><span class="status open">On Track</span></td></tr>
+          <tr><td>Annual Compliance Training</td><td>L. Santos</td><td>HR</td><td>1 May</td><td><span class="status closed">Complete</span></td></tr>
+        </tbody>
+      </table>
+    `
+  },
+
+  announcements: {
+    badge: 'Company News',
+    title: 'Announcements',
+    subtitle: 'Latest updates from leadership and operations.',
+    render: () => `
+      <div class="notice"><strong>📅 All-Hands Meeting — 18 March, 2:00 PM</strong>Dial-in details have been sent to your Outlook calendar. Agenda covers Q1 results and the roadmap for the new customer portal.</div>
+      <div class="notice"><strong>🔒 Password Policy Update — Effective 1 April</strong>All staff must reset passwords to comply with the new 14-character minimum. IT will send reset links on 28 March.</div>
+      <div class="notice"><strong>🏢 Floor 3 Refurbishment — 20–24 March</strong>The east wing on Floor 3 will be closed for carpet replacement. Please use the west wing meeting rooms during this period.</div>
+      <div class="section-title">Previous Announcements</div>
+      <table>
+        <thead><tr><th>Title</th><th>Posted By</th><th>Date</th></tr></thead>
+        <tbody>
+          <tr><td>Q3 Results Published</td><td>CEO Office</td><td>28 Feb</td></tr>
+          <tr><td>New Expense Claim Process</td><td>Finance</td><td>14 Feb</td></tr>
+          <tr><td>Holiday Schedule 2026</td><td>HR</td><td>3 Jan</td></tr>
+        </tbody>
+      </table>
+    `
+  },
+
+  submit: {
+    badge: 'New Request',
+    title: 'Submit a Request',
+    subtitle: 'IT support, facilities, HR queries and more.',
+    render: () => `
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:1.75rem;max-width:560px;">
+        <div class="form-row">
+          <label>Request Type</label>
+          <select>
+            <option>IT Support</option>
+            <option>Facilities</option>
+            <option>HR Query</option>
+            <option>Finance</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Subject</label>
+          <input type="text" placeholder="Brief description of your request">
+        </div>
+        <div class="form-row">
+          <label>Priority</label>
+          <select>
+            <option>Normal</option>
+            <option>High</option>
+            <option>Urgent</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Details</label>
+          <textarea rows="5" placeholder="Please provide as much detail as possible..."></textarea>
+        </div>
+        <button class="btn">Submit Request</button>
+      </div>
+    `
+  }
+};
+
+let currentPage = 'dashboard';
+
+function navigate(pageKey) {
+  if (pageKey === currentPage) return;
+  currentPage = pageKey;
+
+  document.startViewTransition(() => {
+    renderPage(pageKey);
+  });
+}
+
+function renderPage(pageKey) {
+  const page = pages[pageKey];
+
+  // Update content
+  document.getElementById('page-content').innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-title">${page.title}</div>
+        <div class="page-subtitle">${page.subtitle}</div>
+      </div>
+      <div id="active-badge">${page.badge}</div>
+    </div>
+    ${page.render()}
+  `;
+
+  // Update nav buttons
+  document.querySelectorAll('[data-page]').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === pageKey);
+  });
+}
+
+// Init
+renderPage('dashboard');
+</script>
+</body>
+</html>
