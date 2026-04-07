@@ -1,0 +1,359 @@
+<style>
+  @import url('https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/light.css');
+  @import url('https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/dark.css');
+
+  .wizard-wrapper {
+    padding: 1.5rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .progress-track {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    position: relative;
+  }
+
+  .progress-track::before {
+    content: '';
+    position: absolute;
+    top: 14px;
+    left: calc(14% + 14px);
+    right: calc(14% + 14px);
+    height: 2px;
+    background: var(--color-border-tertiary);
+    z-index: 0;
+  }
+
+  .step-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    position: relative;
+    z-index: 1;
+    cursor: pointer;
+  }
+
+  .step-bubble {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 500;
+    border: 2px solid var(--color-border-tertiary);
+    background: var(--color-background-primary);
+    color: var(--color-text-tertiary);
+    transition: all 0.25s ease;
+    position: relative;
+  }
+
+  .step-item.completed .step-bubble {
+    background: var(--sl-color-primary-600);
+    border-color: var(--sl-color-primary-600);
+    color: white;
+  }
+
+  .step-item.active .step-bubble {
+    background: var(--color-background-primary);
+    border-color: var(--sl-color-primary-600);
+    border-width: 2px;
+    color: var(--sl-color-primary-600);
+    box-shadow: 0 0 0 4px var(--sl-color-primary-100);
+  }
+
+  .step-label {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    text-align: center;
+    line-height: 1.3;
+    max-width: 70px;
+    transition: color 0.2s;
+  }
+
+  .step-item.completed .step-label {
+    color: var(--color-text-secondary);
+  }
+
+  .step-item.active .step-label {
+    color: var(--sl-color-primary-700);
+    font-weight: 500;
+  }
+
+  .connector {
+    position: absolute;
+    top: 14px;
+    height: 2px;
+    z-index: 0;
+    transition: background 0.3s;
+  }
+
+  .wizard-guidance {
+    background: var(--color-background-secondary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-left: 3px solid var(--sl-color-primary-500);
+    border-radius: var(--border-radius-md);
+    padding: 12px 14px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .guidance-icon {
+    color: var(--sl-color-primary-500);
+    font-size: 15px;
+    margin-top: 1px;
+    flex-shrink: 0;
+  }
+
+  .guidance-text {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    line-height: 1.55;
+  }
+
+  .guidance-text strong {
+    color: var(--color-text-primary);
+    font-weight: 500;
+    display: block;
+    margin-bottom: 2px;
+    font-size: 13px;
+  }
+
+  .wizard-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 4px;
+  }
+
+  .step-counter {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+  }
+
+  sl-icon-button {
+    font-size: 14px;
+  }
+</style>
+
+<script
+  type="module"
+  src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"
+></script>
+
+<div class="wizard-wrapper" id="wizard">
+  <div class="progress-track" id="track">
+    <!-- Connectors rendered by JS -->
+  </div>
+
+  <div class="wizard-guidance" id="guidance">
+    <span class="guidance-icon" id="guidance-icon">💡</span>
+    <div class="guidance-text" id="guidance-text"></div>
+  </div>
+
+  <div class="wizard-actions">
+    <sl-button variant="text" id="btn-back" onclick="go(-1)">
+      <sl-icon slot="prefix" name="arrow-left"></sl-icon>
+      Back
+    </sl-button>
+    <span class="step-counter" id="counter"></span>
+    <sl-button variant="primary" id="btn-next" onclick="go(1)">
+      Next
+      <sl-icon slot="suffix" name="arrow-right"></sl-icon>
+    </sl-button>
+  </div>
+</div>
+
+<script>
+  const steps = [
+    {
+      label: 'Create review',
+      icon: '✦',
+      guidance: {
+        title: 'Create your review',
+        body: "Give your review a clear title and description. This will help reviewers understand the scope of what's being evaluated.",
+      },
+    },
+    {
+      label: 'Add documents',
+      icon: '✦',
+      guidance: {
+        title: 'Attach supporting documents',
+        body: 'Upload any files, specs, or references that reviewers will need. You can add more documents later if needed.',
+      },
+    },
+    {
+      label: 'Add reviewers',
+      icon: '✦',
+      guidance: {
+        title: 'Assign your reviewers',
+        body: 'Choose who will review this submission. You can assign different roles — approvers, observers, or collaborators.',
+      },
+    },
+    {
+      label: 'Notify reviewers',
+      icon: '✦',
+      guidance: {
+        title: 'Send notifications',
+        body: 'Review and customise the notification message before sending. Reviewers will receive an email with a direct link.',
+      },
+    },
+  ];
+
+  let current = 0;
+
+  function render() {
+    const track = document.getElementById('track');
+
+    // Clear
+    track.innerHTML = '';
+
+    // Build connectors + step items
+    steps.forEach((step, i) => {
+      if (i > 0) {
+        const conn = document.createElement('div');
+        conn.className = 'connector';
+        // position between bubble centers
+        const pct = 100 / steps.length;
+        const left = (i - 1) * pct + pct / 2 + '%';
+        const right = (steps.length - i) * pct - pct / 2 + '%';
+        conn.style.left = left;
+        conn.style.right = right;
+        conn.style.background =
+          i <= current
+            ? 'var(--sl-color-primary-600)'
+            : 'var(--color-border-tertiary)';
+        track.appendChild(conn);
+      }
+
+      const item = document.createElement('div');
+      item.className =
+        'step-item' +
+        (i < current ? ' completed' : i === current ? ' active' : '');
+      item.onclick = () => {
+        current = i;
+        render();
+      };
+
+      const bubble = document.createElement('div');
+      bubble.className = 'step-bubble';
+
+      if (i < current) {
+        bubble.innerHTML = `<sl-icon name="check2" style="font-size:13px"></sl-icon>`;
+      } else {
+        bubble.textContent = i + 1;
+      }
+
+      const label = document.createElement('div');
+      label.className = 'step-label';
+      label.textContent = step.label;
+
+      item.appendChild(bubble);
+      item.appendChild(label);
+      track.appendChild(item);
+    });
+
+    // Guidance
+    const g = steps[current].guidance;
+    document.getElementById('guidance-text').innerHTML =
+      `<strong>${g.title}</strong>${g.body}`;
+
+    // Counter
+    document.getElementById('counter').textContent =
+      `Step ${current + 1} of ${steps.length}`;
+
+    // Buttons
+    document.getElementById('btn-back').disabled = current === 0;
+    const nextBtn = document.getElementById('btn-next');
+    if (current === steps.length - 1) {
+      nextBtn.textContent = '';
+      nextBtn.innerHTML =
+        'Finish <sl-icon slot="suffix" name="check2"></sl-icon>';
+    } else {
+      nextBtn.innerHTML =
+        'Next <sl-icon slot="suffix" name="arrow-right"></sl-icon>';
+    }
+  }
+
+  function go(dir) {
+    const next = current + dir;
+    if (next >= 0 && next < steps.length) {
+      current = next;
+      render();
+    }
+  }
+
+  render();
+</script>
+
+<!-- 
+
+public class ReviewWizardSession
+{
+    public bool IsActive { get; set; }
+    public int CurrentStep { get; set; }
+    public int TotalSteps { get; set; } = 4;
+    public string ReviewTitle { get; set; }
+    // ... other accumulated fields
+}
+
+public class ReviewWizardService
+{
+    private const string Key = "ReviewWizard";
+    private readonly IHttpContextAccessor _http;
+
+    public ReviewWizardService(IHttpContextAccessor http) => _http = http;
+
+    public ReviewWizardSession Get() =>
+        _http.HttpContext.Session.Get<ReviewWizardSession>(Key) ?? new() { IsActive = false };
+
+    public void Save(ReviewWizardSession session) =>
+        _http.HttpContext.Session.Set(Key, session);
+
+    public void Clear() =>
+        _http.HttpContext.Session.Remove(Key);
+}
+
+
+public class CreateReviewModel : PageModel
+{
+    private readonly ReviewWizardService _wizard;
+
+    public ReviewWizardSession WizardSession { get; set; }
+
+    public CreateReviewModel(ReviewWizardService wizard) => _wizard = wizard;
+
+    public void OnGet()
+    {
+        WizardSession = _wizard.Get();
+        // rest of normal page logic
+    }
+
+    public IActionResult OnPostNext()
+    {
+        var session = _wizard.Get();
+        if (session.IsActive)
+        {
+            session.ReviewTitle = ReviewTitle;
+            session.CurrentStep = 2;
+            _wizard.Save(session);
+        }
+        // rest of normal save logic — same as always
+        return RedirectToPage("NextPage");
+    }
+} -->
+<!-- 
+@if (Model.WizardSession.IsActive)
+{
+    <partial name="_WizardProgress" model="Model.WizardSession" />
+    <div class="wizard-guidance">
+        <p>@* Step-specific instructions here *@</p>
+    </div>
+} -->
