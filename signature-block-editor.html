@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signature Block Editor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #1a1a1e;
+    --bg-raised: #232328;
+    --bg-input: #2a2a30;
+    --bg-hover: #303038;
+    --border: #3a3a42;
+    --border-focus: #6e8efb;
+    --text: #e4e4e8;
+    --text-muted: #8e8e96;
+    --text-dim: #5e5e66;
+    --accent: #6e8efb;
+    --accent-dim: rgba(110,142,251,0.15);
+    --accent-hover: #8ba4fc;
+    --danger: #f06868;
+    --danger-dim: rgba(240,104,104,0.15);
+    --success: #5cc99e;
+    --success-dim: rgba(92,201,158,0.15);
+    --warning: #e8b84a;
+    --warning-dim: rgba(232,184,74,0.15);
+    --block-stroke: #6e8efb;
+    --block-fill: rgba(110,142,251,0.12);
+    --block-selected-stroke: #8ba4fc;
+    --block-selected-fill: rgba(110,142,251,0.22);
+    --radius: 6px;
+    --radius-lg: 10px;
+    --font: 'DM Sans', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Toolbar ── */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 100;
+  }
+
+  .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 8px;
+    border-right: 1px solid var(--border);
+  }
+  .toolbar-group:last-child { border-right: none; }
+
+  .tool-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .tool-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .tool-btn.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(110,142,251,0.3); }
+  .tool-btn.danger:hover { background: var(--danger-dim); color: var(--danger); }
+  .tool-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .tool-btn.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .tool-btn.primary:hover { background: var(--accent-hover); }
+
+  .page-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .page-nav input {
+    width: 38px;
+    height: 28px;
+    text-align: center;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    outline: none;
+  }
+  .page-nav input:focus { border-color: var(--border-focus); }
+
+  .zoom-display {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 44px;
+    text-align: center;
+  }
+
+  .toolbar-spacer { flex: 1; }
+
+  /* ── Template dropdown ── */
+  .template-select {
+    height: 34px;
+    padding: 0 28px 0 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12.5px;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238e8e96' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    outline: none;
+  }
+  .template-select:focus { border-color: var(--border-focus); }
+
+  /* ── Main layout ── */
+  .main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Viewer area ── */
+  .viewer-area {
+    flex: 1;
+    position: relative;
+    overflow: auto;
+    background: #111114;
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .viewer-area.mode-draw { cursor: crosshair; }
+  .viewer-area.mode-select { cursor: default; }
+
+  .page-container {
+    position: relative;
+    box-shadow: var(--shadow-lg);
+    flex-shrink: 0;
+  }
+
+  .page-container canvas {
+    display: block;
+  }
+
+  /* ── Signature block overlays ── */
+  .sig-block-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .sig-block {
+    position: absolute;
+    border: 2px solid var(--block-stroke);
+    background: var(--block-fill);
+    pointer-events: all;
+    cursor: pointer;
+    transition: border-color 0.1s, background 0.1s;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+  .sig-block:hover {
+    border-color: var(--block-selected-stroke);
+    background: var(--block-selected-fill);
+  }
+  .sig-block.selected {
+    border-color: var(--block-selected-stroke);
+    background: var(--block-selected-fill);
+    border-style: solid;
+  }
+  .sig-block.selected::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border: 1px dashed rgba(139,164,252,0.5);
+    border-radius: 1px;
+    pointer-events: none;
+  }
+
+  .sig-block-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+    background: rgba(26,26,30,0.85);
+    padding: 2px 5px;
+    border-radius: 2px;
+    margin: 3px;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: calc(100% - 6px);
+  }
+
+  /* Resize handles */
+  .resize-handle {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+    border: 1px solid var(--bg);
+    border-radius: 2px;
+    pointer-events: all;
+  }
+  .resize-handle.nw { top: -4px; left: -4px; cursor: nw-resize; }
+  .resize-handle.ne { top: -4px; right: -4px; cursor: ne-resize; }
+  .resize-handle.sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+  .resize-handle.se { bottom: -4px; right: -4px; cursor: se-resize; }
+
+  /* Drawing preview rectangle */
+  .draw-preview {
+    position: absolute;
+    border: 2px dashed var(--accent);
+    background: var(--accent-dim);
+    pointer-events: none;
+    display: none;
+  }
+
+  /* Selection marquee */
+  .select-marquee {
+    position: absolute;
+    border: 1px dashed var(--text-dim);
+    background: rgba(255,255,255,0.03);
+    pointer-events: none;
+    display: none;
+  }
+
+  /* ── Side panel ── */
+  .side-panel {
+    width: 280px;
+    background: var(--bg-raised);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 14px 16px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .block-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+  }
+
+  .block-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.1s;
+    border: 1px solid transparent;
+  }
+  .block-item:hover { background: var(--bg-hover); }
+  .block-item.selected { background: var(--accent-dim); border-color: rgba(110,142,251,0.2); }
+
+  .block-item-color {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .block-item-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .block-item-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .block-item-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 1px;
+  }
+
+  .block-item-delete {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-radius: 4px;
+    opacity: 0;
+    transition: all 0.1s;
+  }
+  .block-item:hover .block-item-delete { opacity: 1; }
+  .block-item-delete:hover { background: var(--danger-dim); color: var(--danger); }
+  .block-item-delete svg { width: 14px; height: 14px; }
+
+  .block-list-empty {
+    padding: 32px 16px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+
+  /* ── Properties panel ── */
+  .props-section {
+    border-top: 1px solid var(--border);
+    padding: 12px 14px;
+    flex-shrink: 0;
+  }
+
+  .props-section label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  .props-input {
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12.5px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .props-input:focus { border-color: var(--border-focus); }
+
+  .props-coords {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .props-coord-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .props-coord-field span {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .props-coord-field input {
+    width: 100%;
+    height: 28px;
+    padding: 0 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    outline: none;
+  }
+  .props-coord-field input:focus { border-color: var(--border-focus); }
+
+  /* ── Modal overlay ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+
+  .modal {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    width: 360px;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(8px);
+    transition: transform 0.15s;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+
+  .modal h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  /* ── Upload prompt ── */
+  .upload-prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 12px;
+    color: var(--text-dim);
+  }
+
+  .upload-prompt svg { opacity: 0.3; }
+
+  .upload-prompt p {
+    font-size: 13px;
+    max-width: 260px;
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  /* ── Toast ── */
+  .toast-container {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+
+  .toast {
+    padding: 8px 16px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12.5px;
+    color: var(--text);
+    box-shadow: var(--shadow);
+    pointer-events: all;
+    animation: toast-in 0.2s ease-out;
+    white-space: nowrap;
+  }
+  .toast.success { border-color: rgba(92,201,158,0.4); color: var(--success); }
+  .toast.error { border-color: rgba(240,104,104,0.4); color: var(--danger); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* ── Kbd hint ── */
+  .kbd-hint {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--text-dim);
+    background: var(--bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <div class="toolbar-group">
+    <button class="tool-btn" id="btn-open" title="Open PDF">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Open PDF
+    </button>
+    <input type="file" id="file-input" accept="application/pdf" hidden>
+  </div>
+
+  <div class="toolbar-group">
+    <button class="tool-btn active" id="btn-select" title="Select / Move blocks">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>
+      Select <span class="kbd-hint">V</span>
+    </button>
+    <button class="tool-btn" id="btn-draw" title="Draw signature block">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      Draw Block <span class="kbd-hint">D</span>
+    </button>
+  </div>
+
+  <div class="toolbar-group page-nav" id="page-nav" style="display:none;">
+    <button class="tool-btn" id="btn-prev" title="Previous page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <input type="text" id="page-input" value="1">
+    <span>/ <span id="page-total">1</span></span>
+    <button class="tool-btn" id="btn-next" title="Next page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+  </div>
+
+  <div class="toolbar-group">
+    <button class="tool-btn" id="btn-zoom-out" title="Zoom out">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <span class="zoom-display" id="zoom-display">100%</span>
+    <button class="tool-btn" id="btn-zoom-in" title="Zoom in">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+    </button>
+    <button class="tool-btn" id="btn-zoom-fit" title="Fit to width">Fit</button>
+  </div>
+
+  <div class="toolbar-spacer"></div>
+
+  <div class="toolbar-group">
+    <select class="template-select" id="template-select" title="Load template">
+      <option value="">— Templates —</option>
+    </select>
+    <button class="tool-btn" id="btn-save-template" title="Save current blocks as template">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      Save Template
+    </button>
+  </div>
+
+  <div class="toolbar-group">
+    <button class="tool-btn" id="btn-delete-selected" title="Delete selected blocks" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main-layout">
+  <!-- Viewer -->
+  <div class="viewer-area mode-select" id="viewer-area">
+    <div class="upload-prompt" id="upload-prompt">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <p>Open a PDF to begin defining signature blocks</p>
+      <button class="tool-btn primary" id="btn-upload-cta">Open PDF</button>
+    </div>
+    <div class="page-container" id="page-container" style="display:none;">
+      <canvas id="pdf-canvas"></canvas>
+      <div class="sig-block-overlay" id="block-overlay"></div>
+      <div class="draw-preview" id="draw-preview"></div>
+      <div class="select-marquee" id="select-marquee"></div>
+    </div>
+  </div>
+
+  <!-- Side panel -->
+  <div class="side-panel">
+    <div class="panel-header">Signature Blocks</div>
+    <div class="block-list" id="block-list">
+      <div class="block-list-empty" id="block-list-empty">
+        No blocks defined yet.<br>Use <strong>Draw Block</strong> or load a template.
+      </div>
+    </div>
+
+    <!-- Properties -->
+    <div class="props-section" id="props-section" style="display:none;">
+      <label>Label</label>
+      <input type="text" class="props-input" id="props-label" placeholder="e.g. Project Engineer">
+      <div style="height:10px;"></div>
+      <label>Position (% of page)</label>
+      <div class="props-coords">
+        <div class="props-coord-field">
+          <span>X</span>
+          <input type="number" id="props-x" step="0.1" min="0" max="100">
+        </div>
+        <div class="props-coord-field">
+          <span>Y</span>
+          <input type="number" id="props-y" step="0.1" min="0" max="100">
+        </div>
+        <div class="props-coord-field">
+          <span>W</span>
+          <input type="number" id="props-w" step="0.1" min="1" max="100">
+        </div>
+        <div class="props-coord-field">
+          <span>H</span>
+          <input type="number" id="props-h" step="0.1" min="1" max="100">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Save template modal -->
+<div class="modal-overlay" id="modal-save-template">
+  <div class="modal">
+    <h3>Save as Template</h3>
+    <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">Template Name</label>
+    <input type="text" class="props-input" id="template-name-input" placeholder="e.g. D-Size Drawing Title Block">
+    <div class="modal-actions">
+      <button class="tool-btn" id="modal-cancel">Cancel</button>
+      <button class="tool-btn primary" id="modal-confirm">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
+
+<script type="module">
+  // ── PDF.js setup ──
+  const pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+
+  // ── State ──
+  let pdfDoc = null;
+  let currentPage = 1;
+  let totalPages = 0;
+  let scale = 1.0;
+  let mode = 'select'; // 'select' | 'draw'
+  let blocks = []; // { id, page, x, y, w, h, label } — x/y/w/h as % of page
+  let selectedBlockIds = new Set();
+  let blockIdCounter = 0;
+  let templates = {}; // name -> [{ x, y, w, h, label }]
+
+  // Drawing state
+  let isDrawing = false;
+  let drawStartX = 0, drawStartY = 0;
+
+  // Dragging state
+  let isDragging = false;
+  let dragOffsets = []; // [{ id, offsetX, offsetY }]
+  let dragStartX = 0, dragStartY = 0;
+
+  // Resizing state
+  let isResizing = false;
+  let resizeBlockId = null;
+  let resizeHandle = '';
+  let resizeStartX = 0, resizeStartY = 0;
+  let resizeOrigBlock = null;
+
+  // Marquee selection
+  let isMarquee = false;
+  let marqueeStartX = 0, marqueeStartY = 0;
+
+  // Rendered page dimensions (for converting coords)
+  let pageWidth = 0, pageHeight = 0;
+
+  // ── DOM refs ──
+  const viewerArea = document.getElementById('viewer-area');
+  const pageContainer = document.getElementById('page-container');
+  const pdfCanvas = document.getElementById('pdf-canvas');
+  const blockOverlay = document.getElementById('block-overlay');
+  const drawPreview = document.getElementById('draw-preview');
+  const selectMarquee = document.getElementById('select-marquee');
+  const uploadPrompt = document.getElementById('upload-prompt');
+  const blockList = document.getElementById('block-list');
+  const blockListEmpty = document.getElementById('block-list-empty');
+  const propsSection = document.getElementById('props-section');
+  const pageNav = document.getElementById('page-nav');
+  const pageInput = document.getElementById('page-input');
+  const pageTotalSpan = document.getElementById('page-total');
+  const zoomDisplay = document.getElementById('zoom-display');
+  const templateSelect = document.getElementById('template-select');
+  const fileInput = document.getElementById('file-input');
+
+  // ── Load demo templates ──
+  templates = {
+    'D-Size Title Block (3 sigs)': [
+      { x: 73, y: 87, w: 12, h: 3, label: 'Drawn By' },
+      { x: 73, y: 90.5, w: 12, h: 3, label: 'Checked By' },
+      { x: 73, y: 94, w: 12, h: 3, label: 'Approved By' },
+    ],
+    'Letter - Approval Footer': [
+      { x: 10, y: 88, w: 22, h: 5, label: 'Prepared By' },
+      { x: 40, y: 88, w: 22, h: 5, label: 'Reviewed By' },
+      { x: 70, y: 88, w: 22, h: 5, label: 'Approved By' },
+    ],
+  };
+  refreshTemplateSelect();
+
+  // ── File loading ──
+  document.getElementById('btn-open').addEventListener('click', () => fileInput.click());
+  document.getElementById('btn-upload-cta').addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const buf = await file.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+    totalPages = pdfDoc.numPages;
+    currentPage = 1;
+    pageTotalSpan.textContent = totalPages;
+    pageInput.value = '1';
+    pageNav.style.display = totalPages > 1 ? 'flex' : 'none';
+    uploadPrompt.style.display = 'none';
+    pageContainer.style.display = 'block';
+    blocks = [];
+    selectedBlockIds.clear();
+    await renderPage();
+    fitToWidth();
+    toast('PDF loaded — ' + totalPages + ' page' + (totalPages > 1 ? 's' : ''));
+  });
+
+  // ── Page rendering ──
+  async function renderPage() {
+    if (!pdfDoc) return;
+    const page = await pdfDoc.getPage(currentPage);
+    const viewport = page.getViewport({ scale });
+    pdfCanvas.width = viewport.width;
+    pdfCanvas.height = viewport.height;
+    pageWidth = viewport.width;
+    pageHeight = viewport.height;
+    pageContainer.style.width = viewport.width + 'px';
+    pageContainer.style.height = viewport.height + 'px';
+    const ctx = pdfCanvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    renderBlocks();
+  }
+
+  // ── Page navigation ──
+  document.getElementById('btn-prev').addEventListener('click', () => goToPage(currentPage - 1));
+  document.getElementById('btn-next').addEventListener('click', () => goToPage(currentPage + 1));
+  pageInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') goToPage(parseInt(pageInput.value));
+  });
+
+  function goToPage(n) {
+    n = Math.max(1, Math.min(totalPages, n));
+    if (n === currentPage) return;
+    currentPage = n;
+    pageInput.value = n;
+    selectedBlockIds.clear();
+    renderPage();
+    updatePropsPanel();
+    updateBlockList();
+  }
+
+  // ── Zoom ──
+  document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(scale * 1.25));
+  document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(scale / 1.25));
+  document.getElementById('btn-zoom-fit').addEventListener('click', fitToWidth);
+
+  function setZoom(s) {
+    scale = Math.max(0.25, Math.min(5, s));
+    zoomDisplay.textContent = Math.round(scale * 100) + '%';
+    renderPage();
+  }
+
+  function fitToWidth() {
+    if (!pdfDoc) return;
+    pdfDoc.getPage(currentPage).then(page => {
+      const vp = page.getViewport({ scale: 1 });
+      const availW = viewerArea.clientWidth - 48;
+      setZoom(availW / vp.width);
+    });
+  }
+
+  // ── Mode switching ──
+  const btnSelect = document.getElementById('btn-select');
+  const btnDraw = document.getElementById('btn-draw');
+
+  function setMode(m) {
+    mode = m;
+    btnSelect.classList.toggle('active', m === 'select');
+    btnDraw.classList.toggle('active', m === 'draw');
+    viewerArea.classList.toggle('mode-draw', m === 'draw');
+    viewerArea.classList.toggle('mode-select', m === 'select');
+  }
+
+  btnSelect.addEventListener('click', () => setMode('select'));
+  btnDraw.addEventListener('click', () => setMode('draw'));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'v' || e.key === 'V') setMode('select');
+    if (e.key === 'd' || e.key === 'D') setMode('draw');
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockIds.size > 0) {
+      deleteSelected();
+    }
+    if (e.key === 'Escape') {
+      selectedBlockIds.clear();
+      updateBlockList();
+      updatePropsPanel();
+      renderBlocks();
+    }
+    if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const pageBlocks = blocks.filter(b => b.page === currentPage);
+      selectedBlockIds = new Set(pageBlocks.map(b => b.id));
+      updateBlockList();
+      updatePropsPanel();
+      renderBlocks();
+    }
+  });
+
+  // ── Block rendering ──
+  function renderBlocks() {
+    blockOverlay.innerHTML = '';
+    const pageBlocks = blocks.filter(b => b.page === currentPage);
+
+    pageBlocks.forEach(block => {
+      const el = document.createElement('div');
+      el.className = 'sig-block' + (selectedBlockIds.has(block.id) ? ' selected' : '');
+      el.dataset.blockId = block.id;
+      el.style.left = block.x + '%';
+      el.style.top = block.y + '%';
+      el.style.width = block.w + '%';
+      el.style.height = block.h + '%';
+
+      if (block.label) {
+        const lbl = document.createElement('div');
+        lbl.className = 'sig-block-label';
+        lbl.textContent = block.label;
+        el.appendChild(lbl);
+      }
+
+      // Resize handles (only for selected)
+      if (selectedBlockIds.has(block.id) && selectedBlockIds.size === 1) {
+        ['nw','ne','sw','se'].forEach(corner => {
+          const h = document.createElement('div');
+          h.className = 'resize-handle ' + corner;
+          h.dataset.handle = corner;
+          h.dataset.blockId = block.id;
+          el.appendChild(h);
+        });
+      }
+
+      blockOverlay.appendChild(el);
+    });
+
+    // Update delete button visibility
+    document.getElementById('btn-delete-selected').style.display =
+      selectedBlockIds.size > 0 ? '' : 'none';
+  }
+
+  // ── Block list ──
+  function updateBlockList() {
+    const pageBlocks = blocks.filter(b => b.page === currentPage);
+    blockListEmpty.style.display = pageBlocks.length === 0 ? '' : 'none';
+
+    // Remove old items
+    blockList.querySelectorAll('.block-item').forEach(el => el.remove());
+
+    pageBlocks.forEach(block => {
+      const item = document.createElement('div');
+      item.className = 'block-item' + (selectedBlockIds.has(block.id) ? ' selected' : '');
+      item.dataset.blockId = block.id;
+      item.innerHTML = `
+        <div class="block-item-color"></div>
+        <div class="block-item-info">
+          <div class="block-item-label">${block.label || 'Signature Block'}</div>
+          <div class="block-item-meta">pg ${block.page} · ${block.w.toFixed(1)}% × ${block.h.toFixed(1)}%</div>
+        </div>
+        <button class="block-item-delete" title="Delete">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      `;
+
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.block-item-delete')) {
+          blocks = blocks.filter(b => b.id !== block.id);
+          selectedBlockIds.delete(block.id);
+          updateBlockList();
+          updatePropsPanel();
+          renderBlocks();
+          return;
+        }
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+          selectedBlockIds.clear();
+        }
+        if (selectedBlockIds.has(block.id)) {
+          selectedBlockIds.delete(block.id);
+        } else {
+          selectedBlockIds.add(block.id);
+        }
+        updateBlockList();
+        updatePropsPanel();
+        renderBlocks();
+      });
+
+      blockList.appendChild(item);
+    });
+  }
+
+  // ── Properties panel ──
+  function updatePropsPanel() {
+    if (selectedBlockIds.size !== 1) {
+      propsSection.style.display = 'none';
+      return;
+    }
+    propsSection.style.display = '';
+    const block = blocks.find(b => b.id === [...selectedBlockIds][0]);
+    if (!block) return;
+    document.getElementById('props-label').value = block.label || '';
+    document.getElementById('props-x').value = block.x.toFixed(1);
+    document.getElementById('props-y').value = block.y.toFixed(1);
+    document.getElementById('props-w').value = block.w.toFixed(1);
+    document.getElementById('props-h').value = block.h.toFixed(1);
+  }
+
+  // Props input handlers
+  document.getElementById('props-label').addEventListener('input', (e) => {
+    if (selectedBlockIds.size !== 1) return;
+    const block = blocks.find(b => b.id === [...selectedBlockIds][0]);
+    if (block) { block.label = e.target.value; renderBlocks(); updateBlockList(); }
+  });
+
+  ['props-x','props-y','props-w','props-h'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => {
+      if (selectedBlockIds.size !== 1) return;
+      const block = blocks.find(b => b.id === [...selectedBlockIds][0]);
+      if (!block) return;
+      const prop = id.split('-')[1];
+      block[prop] = parseFloat(document.getElementById(id).value) || 0;
+      renderBlocks();
+      updateBlockList();
+    });
+  });
+
+  // ── Mouse interactions on the overlay ──
+  function getOverlayCoords(e) {
+    const rect = pageContainer.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      px: ((e.clientX - rect.left) / rect.width) * 100,
+      py: ((e.clientY - rect.top) / rect.height) * 100,
+    };
+  }
+
+  pageContainer.addEventListener('mousedown', (e) => {
+    if (!pdfDoc) return;
+    e.preventDefault();
+
+    const coords = getOverlayCoords(e);
+
+    // Check for resize handle
+    const handleEl = e.target.closest('.resize-handle');
+    if (handleEl && mode === 'select') {
+      isResizing = true;
+      resizeHandle = handleEl.dataset.handle;
+      resizeBlockId = parseInt(handleEl.dataset.blockId);
+      resizeStartX = coords.px;
+      resizeStartY = coords.py;
+      resizeOrigBlock = { ...blocks.find(b => b.id === resizeBlockId) };
+      return;
+    }
+
+    if (mode === 'draw') {
+      isDrawing = true;
+      drawStartX = coords.px;
+      drawStartY = coords.py;
+      drawPreview.style.display = 'block';
+      drawPreview.style.left = coords.px + '%';
+      drawPreview.style.top = coords.py + '%';
+      drawPreview.style.width = '0';
+      drawPreview.style.height = '0';
+      return;
+    }
+
+    // Select mode
+    const blockEl = e.target.closest('.sig-block');
+    if (blockEl) {
+      const blockId = parseInt(blockEl.dataset.blockId);
+
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        if (selectedBlockIds.has(blockId)) {
+          selectedBlockIds.delete(blockId);
+        } else {
+          selectedBlockIds.add(blockId);
+        }
+      } else {
+        if (!selectedBlockIds.has(blockId)) {
+          selectedBlockIds.clear();
+          selectedBlockIds.add(blockId);
+        }
+      }
+
+      // Start drag
+      isDragging = true;
+      dragStartX = coords.px;
+      dragStartY = coords.py;
+      dragOffsets = [];
+      selectedBlockIds.forEach(id => {
+        const b = blocks.find(bl => bl.id === id);
+        if (b) dragOffsets.push({ id, ox: b.x, oy: b.y });
+      });
+
+      updateBlockList();
+      updatePropsPanel();
+      renderBlocks();
+    } else {
+      // Marquee selection or deselect
+      if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        selectedBlockIds.clear();
+        updateBlockList();
+        updatePropsPanel();
+        renderBlocks();
+      }
+
+      isMarquee = true;
+      marqueeStartX = coords.px;
+      marqueeStartY = coords.py;
+      selectMarquee.style.display = 'block';
+      selectMarquee.style.left = coords.px + '%';
+      selectMarquee.style.top = coords.py + '%';
+      selectMarquee.style.width = '0';
+      selectMarquee.style.height = '0';
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!pdfDoc) return;
+    const coords = getOverlayCoords(e);
+
+    if (isDrawing) {
+      const x = Math.min(drawStartX, coords.px);
+      const y = Math.min(drawStartY, coords.py);
+      const w = Math.abs(coords.px - drawStartX);
+      const h = Math.abs(coords.py - drawStartY);
+      drawPreview.style.left = x + '%';
+      drawPreview.style.top = y + '%';
+      drawPreview.style.width = w + '%';
+      drawPreview.style.height = h + '%';
+      return;
+    }
+
+    if (isDragging) {
+      const dx = coords.px - dragStartX;
+      const dy = coords.py - dragStartY;
+      dragOffsets.forEach(({ id, ox, oy }) => {
+        const b = blocks.find(bl => bl.id === id);
+        if (b) {
+          b.x = Math.max(0, Math.min(100 - b.w, ox + dx));
+          b.y = Math.max(0, Math.min(100 - b.h, oy + dy));
+        }
+      });
+      renderBlocks();
+      updatePropsPanel();
+      return;
+    }
+
+    if (isResizing && resizeOrigBlock) {
+      const dx = coords.px - resizeStartX;
+      const dy = coords.py - resizeStartY;
+      const b = blocks.find(bl => bl.id === resizeBlockId);
+      if (!b) return;
+
+      const orig = resizeOrigBlock;
+      if (resizeHandle.includes('e')) {
+        b.w = Math.max(2, orig.w + dx);
+      }
+      if (resizeHandle.includes('w')) {
+        b.x = orig.x + dx;
+        b.w = Math.max(2, orig.w - dx);
+      }
+      if (resizeHandle.includes('s')) {
+        b.h = Math.max(1, orig.h + dy);
+      }
+      if (resizeHandle.includes('n')) {
+        b.y = orig.y + dy;
+        b.h = Math.max(1, orig.h - dy);
+      }
+      renderBlocks();
+      updatePropsPanel();
+      return;
+    }
+
+    if (isMarquee) {
+      const x = Math.min(marqueeStartX, coords.px);
+      const y = Math.min(marqueeStartY, coords.py);
+      const w = Math.abs(coords.px - marqueeStartX);
+      const h = Math.abs(coords.py - marqueeStartY);
+      selectMarquee.style.left = x + '%';
+      selectMarquee.style.top = y + '%';
+      selectMarquee.style.width = w + '%';
+      selectMarquee.style.height = h + '%';
+    }
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (isDrawing) {
+      isDrawing = false;
+      drawPreview.style.display = 'none';
+      const coords = getOverlayCoords(e);
+      const x = Math.min(drawStartX, coords.px);
+      const y = Math.min(drawStartY, coords.py);
+      const w = Math.abs(coords.px - drawStartX);
+      const h = Math.abs(coords.py - drawStartY);
+
+      if (w > 1 && h > 0.5) {
+        const newBlock = {
+          id: ++blockIdCounter,
+          page: currentPage,
+          x, y, w, h,
+          label: '',
+        };
+        blocks.push(newBlock);
+        selectedBlockIds.clear();
+        selectedBlockIds.add(newBlock.id);
+        renderBlocks();
+        updateBlockList();
+        updatePropsPanel();
+        // Focus label input
+        setTimeout(() => document.getElementById('props-label').focus(), 50);
+      }
+      return;
+    }
+
+    if (isDragging) {
+      isDragging = false;
+      updateBlockList();
+      return;
+    }
+
+    if (isResizing) {
+      isResizing = false;
+      resizeBlockId = null;
+      resizeOrigBlock = null;
+      updateBlockList();
+      return;
+    }
+
+    if (isMarquee) {
+      isMarquee = false;
+      selectMarquee.style.display = 'none';
+
+      const coords = getOverlayCoords(e);
+      const mx1 = Math.min(marqueeStartX, coords.px);
+      const my1 = Math.min(marqueeStartY, coords.py);
+      const mx2 = Math.max(marqueeStartX, coords.px);
+      const my2 = Math.max(marqueeStartY, coords.py);
+
+      if (Math.abs(mx2 - mx1) > 1 && Math.abs(my2 - my1) > 1) {
+        const pageBlocks = blocks.filter(b => b.page === currentPage);
+        pageBlocks.forEach(b => {
+          const bx1 = b.x, by1 = b.y, bx2 = b.x + b.w, by2 = b.y + b.h;
+          if (bx1 < mx2 && bx2 > mx1 && by1 < my2 && by2 > my1) {
+            selectedBlockIds.add(b.id);
+          }
+        });
+        updateBlockList();
+        updatePropsPanel();
+        renderBlocks();
+      }
+    }
+  });
+
+  // ── Delete ──
+  document.getElementById('btn-delete-selected').addEventListener('click', deleteSelected);
+
+  function deleteSelected() {
+    blocks = blocks.filter(b => !selectedBlockIds.has(b.id));
+    selectedBlockIds.clear();
+    renderBlocks();
+    updateBlockList();
+    updatePropsPanel();
+  }
+
+  // ── Templates ──
+  function refreshTemplateSelect() {
+    templateSelect.innerHTML = '<option value="">— Templates —</option>';
+    Object.keys(templates).forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      templateSelect.appendChild(opt);
+    });
+  }
+
+  templateSelect.addEventListener('change', () => {
+    const name = templateSelect.value;
+    if (!name || !templates[name]) return;
+    if (!pdfDoc) { toast('Open a PDF first', 'error'); templateSelect.value = ''; return; }
+
+    const tpl = templates[name];
+    const newIds = [];
+    tpl.forEach(def => {
+      const newBlock = {
+        id: ++blockIdCounter,
+        page: currentPage,
+        x: def.x, y: def.y, w: def.w, h: def.h,
+        label: def.label || '',
+      };
+      blocks.push(newBlock);
+      newIds.push(newBlock.id);
+    });
+
+    selectedBlockIds = new Set(newIds);
+    renderBlocks();
+    updateBlockList();
+    updatePropsPanel();
+    templateSelect.value = '';
+    toast('Template "' + name + '" loaded — ' + tpl.length + ' block' + (tpl.length > 1 ? 's' : ''), 'success');
+  });
+
+  // Save template
+  const modalOverlay = document.getElementById('modal-save-template');
+  const templateNameInput = document.getElementById('template-name-input');
+
+  document.getElementById('btn-save-template').addEventListener('click', () => {
+    const pageBlocks = blocks.filter(b => b.page === currentPage);
+    if (pageBlocks.length === 0) { toast('No blocks on current page to save', 'error'); return; }
+    templateNameInput.value = '';
+    modalOverlay.classList.add('open');
+    setTimeout(() => templateNameInput.focus(), 100);
+  });
+
+  document.getElementById('modal-cancel').addEventListener('click', () => modalOverlay.classList.remove('open'));
+  modalOverlay.addEventListener('click', (e) => { if (e.target === modalOverlay) modalOverlay.classList.remove('open'); });
+
+  document.getElementById('modal-confirm').addEventListener('click', saveTemplate);
+  templateNameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveTemplate(); });
+
+  function saveTemplate() {
+    const name = templateNameInput.value.trim();
+    if (!name) { toast('Enter a template name', 'error'); return; }
+    const pageBlocks = blocks.filter(b => b.page === currentPage);
+    templates[name] = pageBlocks.map(b => ({ x: b.x, y: b.y, w: b.w, h: b.h, label: b.label }));
+    refreshTemplateSelect();
+    modalOverlay.classList.remove('open');
+    toast('Template "' + name + '" saved with ' + pageBlocks.length + ' block' + (pageBlocks.length > 1 ? 's' : ''), 'success');
+  }
+
+  // ── Toast ──
+  function toast(msg, type = '') {
+    const container = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = 'toast ' + type;
+    el.textContent = msg;
+    container.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, 2500);
+  }
+</script>
+
+</body>
+</html>
