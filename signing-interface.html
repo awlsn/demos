@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Documents</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs" type="module"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #141417;
+    --bg-raised: #1c1c21;
+    --bg-surface: #232329;
+    --bg-input: #2a2a31;
+    --bg-hover: #2e2e36;
+    --border: #333340;
+    --border-subtle: #2a2a34;
+    --text: #e2e2e8;
+    --text-secondary: #a0a0aa;
+    --text-muted: #6e6e78;
+    --text-dim: #50505a;
+
+    --accent: #5a7cfa;
+    --accent-hover: #7094ff;
+    --accent-dim: rgba(90,124,250,0.12);
+    --accent-glow: rgba(90,124,250,0.25);
+
+    --green: #3dba7a;
+    --green-dim: rgba(61,186,122,0.1);
+    --green-border: rgba(61,186,122,0.3);
+
+    --amber: #d4a039;
+    --amber-dim: rgba(212,160,57,0.1);
+    --amber-border: rgba(212,160,57,0.3);
+
+    --red: #e05555;
+    --red-dim: rgba(224,85,85,0.1);
+
+    --sig-pending-stroke: #d4a039;
+    --sig-pending-fill: rgba(212,160,57,0.1);
+    --sig-signed-stroke: #3dba7a;
+    --sig-signed-fill: rgba(61,186,122,0.12);
+    --sig-other-stroke: #50505a;
+    --sig-other-fill: rgba(80,80,90,0.08);
+
+    --radius: 6px;
+    --radius-lg: 10px;
+    --radius-xl: 14px;
+    --font: 'DM Sans', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+    --shadow: 0 2px 12px rgba(0,0,0,0.4);
+    --shadow-lg: 0 12px 40px rgba(0,0,0,0.5);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ═══ Top bar ═══ */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 100;
+  }
+
+  .topbar-title {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .topbar-meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .topbar-spacer { flex: 1; }
+
+  .progress-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .progress-track {
+    width: 140px;
+    height: 4px;
+    background: var(--bg-surface);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--green);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+  }
+
+  .progress-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 36px;
+    padding: 0 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--bg-hover); color: var(--text); border-color: #444; }
+  .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+  .btn-sign {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+    font-weight: 600;
+  }
+  .btn-sign:hover { background: #49cc88; border-color: #49cc88; }
+  .btn-sign:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-sign-all {
+    background: linear-gradient(135deg, var(--accent), #7c5cfa);
+    border: none;
+    color: #fff;
+    font-weight: 600;
+    padding: 0 20px;
+  }
+  .btn-sign-all:hover { filter: brightness(1.1); }
+  .btn-sign-all:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+
+  /* ═══ Main layout ═══ */
+  .main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ═══ Document sidebar ═══ */
+  .doc-sidebar {
+    width: 300px;
+    background: var(--bg-raised);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .sidebar-header {
+    padding: 14px 16px 10px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .doc-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+  }
+
+  .doc-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.1s;
+    border: 1px solid transparent;
+    margin-bottom: 2px;
+  }
+  .doc-item:hover { background: var(--bg-hover); }
+  .doc-item.active { background: var(--accent-dim); border-color: rgba(90,124,250,0.2); }
+
+  .doc-item-icon {
+    width: 32px;
+    height: 38px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-family: var(--mono);
+    font-size: 8px;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .doc-item-icon::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 10px 10px 0;
+    border-color: transparent var(--bg-raised) transparent transparent;
+  }
+
+  .doc-item-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .doc-item-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 3px;
+  }
+
+  .doc-item-detail {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .doc-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .doc-status-badge.pending {
+    background: var(--amber-dim);
+    color: var(--amber);
+    border: 1px solid var(--amber-border);
+  }
+  .doc-status-badge.signed {
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green-border);
+  }
+  .doc-status-badge.not-required {
+    background: var(--bg-surface);
+    color: var(--text-dim);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .doc-status-badge svg { width: 10px; height: 10px; }
+
+  /* ═══ Viewer area ═══ */
+  .viewer-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #0e0e11;
+  }
+
+  .viewer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .viewer-toolbar .page-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .page-nav input {
+    width: 36px;
+    height: 26px;
+    text-align: center;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    outline: none;
+  }
+  .page-nav input:focus { border-color: var(--accent); }
+
+  .viewer-toolbar .spacer { flex: 1; }
+
+  .zoom-display {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 40px;
+    text-align: center;
+  }
+
+  .viewer-scroll {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .page-container {
+    position: relative;
+    box-shadow: var(--shadow-lg);
+    flex-shrink: 0;
+  }
+
+  .page-container canvas { display: block; }
+
+  /* ═══ Signature block overlays ═══ */
+  .sig-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  .sig-block {
+    position: absolute;
+    border: 2px solid var(--sig-pending-stroke);
+    background: var(--sig-pending-fill);
+    border-radius: 3px;
+    pointer-events: all;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .sig-block:hover {
+    border-color: var(--amber);
+    background: rgba(212,160,57,0.18);
+    transform: scale(1.01);
+  }
+
+  .sig-block.signed {
+    border-color: var(--sig-signed-stroke);
+    background: var(--sig-signed-fill);
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .sig-block.other-signer {
+    border-color: var(--sig-other-stroke);
+    background: var(--sig-other-fill);
+    cursor: default;
+    pointer-events: none;
+    border-style: dashed;
+  }
+
+  .sig-block-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--amber);
+    pointer-events: none;
+    text-align: center;
+    padding: 0 4px;
+  }
+  .sig-block.signed .sig-block-label { color: var(--green); }
+  .sig-block.other-signer .sig-block-label { color: var(--text-dim); }
+
+  .sig-block-action {
+    font-family: var(--font);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--amber);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .sig-block:hover .sig-block-action { opacity: 1; }
+
+  .sig-block-signed-info {
+    font-family: var(--mono);
+    font-size: 8px;
+    color: var(--green);
+    opacity: 0.8;
+    pointer-events: none;
+    text-align: center;
+    padding: 0 4px;
+  }
+
+  /* ═══ Sign action bar ═══ */
+  .sign-action-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: var(--bg-raised);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .sign-action-info {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .sign-action-info strong {
+    color: var(--text);
+  }
+
+  /* ═══ Review gate overlay ═══ */
+  .review-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+    backdrop-filter: blur(4px);
+  }
+  .review-overlay.open { opacity: 1; pointer-events: all; }
+
+  .review-modal {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 28px 32px;
+    width: 480px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(10px);
+    transition: transform 0.2s;
+  }
+  .review-overlay.open .review-modal { transform: translateY(0); }
+
+  .review-modal h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .review-modal .subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+
+  .review-doc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+
+  .review-doc-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg-surface);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .review-doc-name {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .review-doc-sigs {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .review-doc-check {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .review-doc-check.reviewed {
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green-border);
+  }
+  .review-doc-check.not-reviewed {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .review-doc-check svg { width: 12px; height: 12px; }
+
+  .review-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--amber-dim);
+    border: 1px solid var(--amber-border);
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    font-size: 12.5px;
+    color: var(--amber);
+    line-height: 1.5;
+  }
+  .review-warning svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; }
+
+  .review-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  /* ═══ Sign confirmation popover ═══ */
+  .sign-confirm-popover {
+    position: fixed;
+    z-index: 600;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+    width: 260px;
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition: all 0.15s;
+  }
+  .sign-confirm-popover.open { opacity: 1; pointer-events: all; transform: translateY(0); }
+
+  .sign-confirm-popover p {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.4;
+  }
+  .sign-confirm-popover p strong { color: var(--text); }
+
+  .sign-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .btn-sm {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  /* ═══ Signed stamp animation ═══ */
+  @keyframes stamp-appear {
+    0% { transform: scale(1.3); opacity: 0; }
+    50% { transform: scale(0.97); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  .sig-block.just-signed {
+    animation: stamp-appear 0.35s ease-out;
+  }
+
+  /* ═══ Toast ═══ */
+  .toast-container {
+    position: fixed;
+    bottom: 72px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+
+  .toast {
+    padding: 10px 18px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--text);
+    box-shadow: var(--shadow);
+    pointer-events: all;
+    animation: toast-in 0.2s ease-out;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .toast.success { border-color: var(--green-border); }
+  .toast.success svg { color: var(--green); }
+  .toast svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ═══ Complete screen ═══ */
+  .complete-screen {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s;
+  }
+  .complete-screen.visible { opacity: 1; pointer-events: all; }
+
+  .complete-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: var(--green-dim);
+    border: 2px solid var(--green-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 20px;
+    animation: complete-pop 0.5s ease-out 0.2s both;
+  }
+  .complete-icon svg { width: 32px; height: 32px; color: var(--green); }
+
+  @keyframes complete-pop {
+    0% { transform: scale(0); opacity: 0; }
+    70% { transform: scale(1.1); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  .complete-screen h1 {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    animation: complete-fade 0.4s ease-out 0.4s both;
+  }
+
+  .complete-screen p {
+    font-size: 14px;
+    color: var(--text-muted);
+    animation: complete-fade 0.4s ease-out 0.5s both;
+  }
+
+  @keyframes complete-fade {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ═══ Scrollbar ═══ */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div>
+    <div class="topbar-title" id="package-title">FP-2026-0042 — Building B Fire Protection Submittal</div>
+    <div class="topbar-meta">Initiated by Sarah Mitchell · Apr 11, 2026</div>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="progress-bar-container">
+    <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+    <span class="progress-label" id="progress-label">0 / 3 signed</span>
+  </div>
+  <button class="btn btn-sign-all" id="btn-sign-all">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M8 12l3 3 5-6"/></svg>
+    Sign All
+  </button>
+</div>
+
+<!-- Main -->
+<div class="main-layout">
+  <!-- Document sidebar -->
+  <div class="doc-sidebar">
+    <div class="sidebar-header">Documents in Package</div>
+    <div class="doc-list" id="doc-list"></div>
+  </div>
+
+  <!-- Viewer -->
+  <div class="viewer-area">
+    <div class="viewer-toolbar">
+      <div class="page-nav">
+        <button class="btn btn-sm" id="btn-prev" style="padding:0 6px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <input type="text" id="page-input" value="1">
+        <span>/ <span id="page-total">1</span></span>
+        <button class="btn btn-sm" id="btn-next" style="padding:0 6px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn btn-sm" id="btn-zoom-out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      </button>
+      <span class="zoom-display" id="zoom-display">100%</span>
+      <button class="btn btn-sm" id="btn-zoom-in">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      </button>
+      <button class="btn btn-sm" id="btn-zoom-fit">Fit</button>
+    </div>
+
+    <div class="viewer-scroll" id="viewer-scroll">
+      <div class="page-container" id="page-container">
+        <canvas id="pdf-canvas"></canvas>
+        <div class="sig-overlay" id="sig-overlay"></div>
+      </div>
+    </div>
+
+    <!-- Bottom action bar -->
+    <div class="sign-action-bar" id="sign-action-bar">
+      <div class="sign-action-info" id="sign-action-info"></div>
+      <button class="btn" id="btn-prev-doc">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        Previous
+      </button>
+      <button class="btn btn-sign" id="btn-sign-doc" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+        Sign This Document
+      </button>
+      <button class="btn btn-primary" id="btn-next-doc">
+        Next
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Sign confirm popover -->
+<div class="sign-confirm-popover" id="sign-confirm">
+  <p>Apply your signature to <strong id="confirm-block-label">this block</strong>?</p>
+  <div class="sign-confirm-actions">
+    <button class="btn btn-sm" id="confirm-cancel">Cancel</button>
+    <button class="btn btn-sign btn-sm" id="confirm-sign">Sign</button>
+  </div>
+</div>
+
+<!-- Sign All review modal -->
+<div class="review-overlay" id="review-overlay">
+  <div class="review-modal">
+    <h2>Sign All Documents</h2>
+    <p class="subtitle">You are about to apply your signature to all pending blocks across the following documents.</p>
+    <div class="review-doc-list" id="review-doc-list"></div>
+    <div class="review-warning" id="review-warning" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>You have not viewed all documents yet. Please review each document before signing.</span>
+    </div>
+    <div class="review-actions">
+      <button class="btn" id="review-cancel">Cancel</button>
+      <button class="btn btn-sign" id="review-confirm" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+        Confirm &amp; Sign All
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Complete screen -->
+<div class="complete-screen" id="complete-screen">
+  <div class="complete-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+  </div>
+  <h1>All Documents Signed</h1>
+  <p>Your signatures have been applied. You may close this window.</p>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toast-container"></div>
+
+<script type="module">
+  // ── PDF.js ──
+  const pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+
+  // ── Simulated data ──
+  // In production this comes from your API based on the package ID and current user
+  const currentUser = { id: 'u-jdavis', name: 'James Davis', title: 'Fire Protection Engineer' };
+
+  const sigPackage = {
+    id: 'pkg-042',
+    title: 'FP-2026-0042 — Building B Fire Protection Submittal',
+    documents: [
+      {
+        id: 'doc-1',
+        name: 'FP-100 — Fire Protection Site Plan',
+        pages: 3,
+        sigBlocks: [
+          { id: 'sb-1', page: 1, x: 72, y: 86, w: 14, h: 3.5, label: 'Fire Protection Eng.', assignedTo: 'u-jdavis', status: 'pending' },
+          { id: 'sb-2', page: 1, x: 72, y: 90, w: 14, h: 3.5, label: 'Project Manager', assignedTo: 'u-smitchell', status: 'signed', signedBy: 'S. Mitchell', signedAt: 'Apr 11' },
+          { id: 'sb-3', page: 1, x: 72, y: 94, w: 14, h: 3.5, label: 'QA Review', assignedTo: 'u-bthompson', status: 'pending' },
+        ],
+      },
+      {
+        id: 'doc-2',
+        name: 'FP-201 — Sprinkler Riser Detail',
+        pages: 2,
+        sigBlocks: [
+          { id: 'sb-4', page: 1, x: 72, y: 86, w: 14, h: 3.5, label: 'Fire Protection Eng.', assignedTo: 'u-jdavis', status: 'pending' },
+          { id: 'sb-5', page: 1, x: 72, y: 90, w: 14, h: 3.5, label: 'Checked By', assignedTo: 'u-jdavis', status: 'pending' },
+          { id: 'sb-6', page: 1, x: 72, y: 94, w: 14, h: 3.5, label: 'Approved By', assignedTo: 'u-smitchell', status: 'pending' },
+        ],
+      },
+      {
+        id: 'doc-3',
+        name: 'FP-301 — Alarm System Riser Diagram',
+        pages: 1,
+        sigBlocks: [
+          { id: 'sb-7', page: 1, x: 72, y: 90, w: 14, h: 3.5, label: 'Fire Protection Eng.', assignedTo: 'u-jdavis', status: 'pending' },
+          { id: 'sb-8', page: 1, x: 72, y: 94, w: 14, h: 3.5, label: 'Project Manager', assignedTo: 'u-smitchell', status: 'pending' },
+        ],
+      },
+    ],
+  };
+
+  // ── State ──
+  let activeDocIndex = 0;
+  let currentPage = 1;
+  let scale = 1.0;
+  let viewedDocs = new Set(); // track which docs user has scrolled/viewed
+
+  // ── DOM ──
+  const docListEl = document.getElementById('doc-list');
+  const pageContainer = document.getElementById('page-container');
+  const pdfCanvas = document.getElementById('pdf-canvas');
+  const sigOverlay = document.getElementById('sig-overlay');
+  const viewerScroll = document.getElementById('viewer-scroll');
+  const pageInput = document.getElementById('page-input');
+  const pageTotalSpan = document.getElementById('page-total');
+  const zoomDisplay = document.getElementById('zoom-display');
+  const signActionInfo = document.getElementById('sign-action-info');
+  const btnSignDoc = document.getElementById('btn-sign-doc');
+  const progressFill = document.getElementById('progress-fill');
+  const progressLabel = document.getElementById('progress-label');
+
+  // ── Initialize ──
+  renderDocList();
+  selectDoc(0);
+  updateProgress();
+
+  // ── Document list ──
+  function renderDocList() {
+    docListEl.innerHTML = '';
+    sigPackage.documents.forEach((doc, i) => {
+      const myBlocks = doc.sigBlocks.filter(b => b.assignedTo === currentUser.id);
+      const mySigned = myBlocks.filter(b => b.status === 'signed').length;
+      const myTotal = myBlocks.length;
+
+      let statusHtml;
+      if (myTotal === 0) {
+        statusHtml = '<span class="doc-status-badge not-required">No action</span>';
+      } else if (mySigned === myTotal) {
+        statusHtml = `<span class="doc-status-badge signed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Signed</span>`;
+      } else {
+        statusHtml = `<span class="doc-status-badge pending">${myTotal - mySigned} pending</span>`;
+      }
+
+      const item = document.createElement('div');
+      item.className = 'doc-item' + (i === activeDocIndex ? ' active' : '');
+      item.innerHTML = `
+        <div class="doc-item-icon">PDF</div>
+        <div class="doc-item-info">
+          <div class="doc-item-name">${doc.name}</div>
+          <div class="doc-item-detail">
+            ${doc.pages} pg · ${doc.sigBlocks.length} blocks
+          </div>
+          <div style="margin-top:4px;">${statusHtml}</div>
+        </div>
+      `;
+      item.addEventListener('click', () => selectDoc(i));
+      docListEl.appendChild(item);
+    });
+  }
+
+  function selectDoc(index) {
+    activeDocIndex = index;
+    currentPage = 1;
+    viewedDocs.add(index);
+
+    // Update active state in list
+    docListEl.querySelectorAll('.doc-item').forEach((el, i) => {
+      el.classList.toggle('active', i === index);
+    });
+
+    renderFakePage();
+    renderSigBlocks();
+    updateActionBar();
+    updatePageNav();
+  }
+
+  // ── Fake page rendering (since we don't have real PDFs) ──
+  function renderFakePage() {
+    const doc = sigPackage.documents[activeDocIndex];
+    // Simulate a D-size landscape drawing
+    const w = 800 * scale;
+    const h = 550 * scale;
+
+    pdfCanvas.width = w;
+    pdfCanvas.height = h;
+    pageContainer.style.width = w + 'px';
+    pageContainer.style.height = h + 'px';
+
+    const ctx = pdfCanvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+
+    // Draw a fake engineering drawing feel
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.5;
+
+    // Border
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(10, 10, w - 20, h - 20);
+
+    // Inner border
+    ctx.lineWidth = 0.5;
+    ctx.strokeStyle = '#999';
+    ctx.strokeRect(20, 20, w - 40, h - 40);
+
+    // Grid lines (faint)
+    ctx.strokeStyle = '#e8e8e8';
+    ctx.lineWidth = 0.3;
+    for (let x = 60; x < w - 40; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, h - 20); ctx.stroke();
+    }
+    for (let y = 60; y < h - 40; y += 40) {
+      ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(w - 20, y); ctx.stroke();
+    }
+
+    // Title block area
+    const tbX = w * 0.68;
+    const tbY = h * 0.78;
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(tbX, tbY, w - tbX - 12, h - tbY - 12);
+
+    // Title block lines
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = '#555';
+    const rows = 4;
+    const rowH = (h - tbY - 12) / rows;
+    for (let r = 1; r < rows; r++) {
+      ctx.beginPath();
+      ctx.moveTo(tbX, tbY + r * rowH);
+      ctx.lineTo(w - 12, tbY + r * rowH);
+      ctx.stroke();
+    }
+
+    // Title text
+    ctx.fillStyle = '#333';
+    ctx.font = `bold ${11 * scale}px 'DM Sans', sans-serif`;
+    ctx.fillText(doc.name, tbX + 8, tbY + 16);
+
+    ctx.font = `${9 * scale}px 'DM Sans', sans-serif`;
+    ctx.fillStyle = '#666';
+    ctx.fillText(`Page ${currentPage} of ${doc.pages}`, tbX + 8, tbY + 32);
+
+    // Some fake drawing content
+    ctx.strokeStyle = '#4477aa';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(w * 0.35, h * 0.4, 60 * scale, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(w * 0.15, h * 0.3);
+    ctx.lineTo(w * 0.55, h * 0.3);
+    ctx.lineTo(w * 0.55, h * 0.6);
+    ctx.lineTo(w * 0.15, h * 0.6);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Pipe runs
+    ctx.strokeStyle = '#3366aa';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.2, h * 0.35);
+    ctx.lineTo(w * 0.45, h * 0.35);
+    ctx.lineTo(w * 0.45, h * 0.55);
+    ctx.stroke();
+
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = '#cc4444';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.25, h * 0.25);
+    ctx.lineTo(w * 0.6, h * 0.25);
+    ctx.lineTo(w * 0.6, h * 0.65);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // ── Signature block rendering ──
+  function renderSigBlocks() {
+    sigOverlay.innerHTML = '';
+    const doc = sigPackage.documents[activeDocIndex];
+    const pageBlocks = doc.sigBlocks.filter(b => b.page === currentPage);
+
+    pageBlocks.forEach(block => {
+      const el = document.createElement('div');
+      const isMine = block.assignedTo === currentUser.id;
+      const isSigned = block.status === 'signed';
+
+      let cls = 'sig-block';
+      if (isSigned) cls += ' signed';
+      else if (!isMine) cls += ' other-signer';
+      el.className = cls;
+
+      el.style.left = block.x + '%';
+      el.style.top = block.y + '%';
+      el.style.width = block.w + '%';
+      el.style.height = block.h + '%';
+      el.dataset.blockId = block.id;
+
+      if (isSigned) {
+        el.innerHTML = `
+          <div class="sig-block-label">${block.label}</div>
+          <div class="sig-block-signed-info">${block.signedBy} · ${block.signedAt}</div>
+        `;
+      } else if (isMine) {
+        el.innerHTML = `
+          <div class="sig-block-label">${block.label}</div>
+          <div class="sig-block-action">Click to sign</div>
+        `;
+        el.addEventListener('click', (e) => showSignConfirm(block, e));
+      } else {
+        el.innerHTML = `
+          <div class="sig-block-label">${block.label}</div>
+        `;
+      }
+
+      sigOverlay.appendChild(el);
+    });
+  }
+
+  // ── Sign confirm popover ──
+  const signConfirm = document.getElementById('sign-confirm');
+  let pendingSignBlock = null;
+
+  function showSignConfirm(block, event) {
+    pendingSignBlock = block;
+    document.getElementById('confirm-block-label').textContent = block.label;
+
+    // Position near the click
+    const rect = event.target.closest('.sig-block').getBoundingClientRect();
+    signConfirm.style.left = Math.min(rect.left, window.innerWidth - 280) + 'px';
+    signConfirm.style.top = (rect.top - 90) + 'px';
+    signConfirm.classList.add('open');
+  }
+
+  document.getElementById('confirm-cancel').addEventListener('click', () => {
+    signConfirm.classList.remove('open');
+    pendingSignBlock = null;
+  });
+
+  document.getElementById('confirm-sign').addEventListener('click', () => {
+    if (!pendingSignBlock) return;
+    applySignature(pendingSignBlock);
+    signConfirm.classList.remove('open');
+    pendingSignBlock = null;
+  });
+
+  // Close popover on outside click
+  document.addEventListener('mousedown', (e) => {
+    if (signConfirm.classList.contains('open') && !signConfirm.contains(e.target) && !e.target.closest('.sig-block')) {
+      signConfirm.classList.remove('open');
+      pendingSignBlock = null;
+    }
+  });
+
+  function applySignature(block) {
+    block.status = 'signed';
+    block.signedBy = currentUser.name.split(' ').map((n,i) => i === 0 ? n[0] + '.' : n).join(' ');
+    block.signedAt = 'Apr 14';
+
+    renderSigBlocks();
+    renderDocList();
+    updateActionBar();
+    updateProgress();
+
+    // Add just-signed animation
+    const el = sigOverlay.querySelector(`[data-block-id="${block.id}"]`);
+    if (el) el.classList.add('just-signed');
+
+    toast(`Signed: ${block.label}`, 'success');
+
+    // Check if everything is done
+    checkAllComplete();
+  }
+
+  // ── Sign This Document ──
+  btnSignDoc.addEventListener('click', () => {
+    const doc = sigPackage.documents[activeDocIndex];
+    const myPending = doc.sigBlocks.filter(b => b.assignedTo === currentUser.id && b.status === 'pending');
+    myPending.forEach(b => applySignature(b));
+  });
+
+  // ── Action bar ──
+  function updateActionBar() {
+    const doc = sigPackage.documents[activeDocIndex];
+    const myBlocks = doc.sigBlocks.filter(b => b.assignedTo === currentUser.id);
+    const myPending = myBlocks.filter(b => b.status === 'pending');
+
+    if (myBlocks.length === 0) {
+      signActionInfo.innerHTML = 'No signature required from you on this document.';
+      btnSignDoc.disabled = true;
+      btnSignDoc.textContent = 'No Action Needed';
+    } else if (myPending.length === 0) {
+      signActionInfo.innerHTML = `<strong>All signed</strong> — your ${myBlocks.length} signature${myBlocks.length > 1 ? 's have' : ' has'} been applied.`;
+      btnSignDoc.disabled = true;
+      btnSignDoc.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Signed`;
+    } else {
+      signActionInfo.innerHTML = `<strong>${myPending.length}</strong> signature${myPending.length > 1 ? 's' : ''} pending from you. Click a block or use the button.`;
+      btnSignDoc.disabled = false;
+      btnSignDoc.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Sign This Document (${myPending.length})`;
+    }
+  }
+
+  // ── Progress ──
+  function updateProgress() {
+    let total = 0, signed = 0;
+    sigPackage.documents.forEach(doc => {
+      doc.sigBlocks.forEach(b => {
+        if (b.assignedTo === currentUser.id) {
+          total++;
+          if (b.status === 'signed') signed++;
+        }
+      });
+    });
+    const pct = total > 0 ? (signed / total) * 100 : 0;
+    progressFill.style.width = pct + '%';
+    progressLabel.textContent = `${signed} / ${total} signed`;
+
+    // Update Sign All button
+    const allDone = signed === total;
+    document.getElementById('btn-sign-all').disabled = allDone;
+  }
+
+  // ── Nav between docs ──
+  document.getElementById('btn-prev-doc').addEventListener('click', () => {
+    if (activeDocIndex > 0) selectDoc(activeDocIndex - 1);
+  });
+
+  document.getElementById('btn-next-doc').addEventListener('click', () => {
+    if (activeDocIndex < sigPackage.documents.length - 1) selectDoc(activeDocIndex + 1);
+  });
+
+  // ── Page nav ──
+  document.getElementById('btn-prev').addEventListener('click', () => goToPage(currentPage - 1));
+  document.getElementById('btn-next').addEventListener('click', () => goToPage(currentPage + 1));
+  pageInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') goToPage(parseInt(pageInput.value)); });
+
+  function goToPage(n) {
+    const doc = sigPackage.documents[activeDocIndex];
+    n = Math.max(1, Math.min(doc.pages, n));
+    if (n === currentPage) return;
+    currentPage = n;
+    pageInput.value = n;
+    renderFakePage();
+    renderSigBlocks();
+  }
+
+  function updatePageNav() {
+    const doc = sigPackage.documents[activeDocIndex];
+    pageInput.value = currentPage;
+    pageTotalSpan.textContent = doc.pages;
+  }
+
+  // ── Zoom ──
+  document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(scale * 1.2));
+  document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(scale / 1.2));
+  document.getElementById('btn-zoom-fit').addEventListener('click', fitToWidth);
+
+  function setZoom(s) {
+    scale = Math.max(0.3, Math.min(4, s));
+    zoomDisplay.textContent = Math.round(scale * 100) + '%';
+    renderFakePage();
+    renderSigBlocks();
+  }
+
+  function fitToWidth() {
+    const avail = viewerScroll.clientWidth - 48;
+    setZoom(avail / 800); // 800 is our fake base width
+  }
+  fitToWidth();
+
+  // ── Sign All flow ──
+  const reviewOverlay = document.getElementById('review-overlay');
+
+  document.getElementById('btn-sign-all').addEventListener('click', () => {
+    const reviewList = document.getElementById('review-doc-list');
+    reviewList.innerHTML = '';
+
+    let allViewed = true;
+    sigPackage.documents.forEach((doc, i) => {
+      const myBlocks = doc.sigBlocks.filter(b => b.assignedTo === currentUser.id);
+      const myPending = myBlocks.filter(b => b.status === 'pending');
+      if (myPending.length === 0) return;
+
+      const viewed = viewedDocs.has(i);
+      if (!viewed) allViewed = false;
+
+      const row = document.createElement('div');
+      row.className = 'review-doc-row';
+      row.innerHTML = `
+        <div class="review-doc-check ${viewed ? 'reviewed' : 'not-reviewed'}">
+          ${viewed
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/></svg>'
+          }
+        </div>
+        <div class="review-doc-name">${doc.name}</div>
+        <div class="review-doc-sigs">${myPending.length} sig${myPending.length > 1 ? 's' : ''}</div>
+      `;
+      reviewList.appendChild(row);
+    });
+
+    const warning = document.getElementById('review-warning');
+    const confirmBtn = document.getElementById('review-confirm');
+    warning.style.display = allViewed ? 'none' : 'flex';
+    confirmBtn.disabled = !allViewed;
+
+    reviewOverlay.classList.add('open');
+  });
+
+  document.getElementById('review-cancel').addEventListener('click', () => reviewOverlay.classList.remove('open'));
+  reviewOverlay.addEventListener('click', (e) => { if (e.target === reviewOverlay) reviewOverlay.classList.remove('open'); });
+
+  document.getElementById('review-confirm').addEventListener('click', () => {
+    reviewOverlay.classList.remove('open');
+
+    // Sign everything
+    sigPackage.documents.forEach(doc => {
+      doc.sigBlocks.forEach(b => {
+        if (b.assignedTo === currentUser.id && b.status === 'pending') {
+          b.status = 'signed';
+          b.signedBy = currentUser.name.split(' ').map((n,i) => i === 0 ? n[0] + '.' : n).join(' ');
+          b.signedAt = 'Apr 14';
+        }
+      });
+    });
+
+    renderSigBlocks();
+    renderDocList();
+    updateActionBar();
+    updateProgress();
+    toast('All documents signed successfully', 'success');
+    checkAllComplete();
+  });
+
+  // ── Completion ──
+  function checkAllComplete() {
+    let total = 0, signed = 0;
+    sigPackage.documents.forEach(doc => {
+      doc.sigBlocks.forEach(b => {
+        if (b.assignedTo === currentUser.id) {
+          total++;
+          if (b.status === 'signed') signed++;
+        }
+      });
+    });
+    if (signed === total && total > 0) {
+      setTimeout(() => {
+        document.getElementById('complete-screen').classList.add('visible');
+      }, 600);
+    }
+  }
+
+  // ── Toast ──
+  function toast(msg, type = '') {
+    const container = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = 'toast ' + type;
+    el.innerHTML = (type === 'success' ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>' : '') + msg;
+    container.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, 2500);
+  }
+</script>
+
+</body>
+</html>
