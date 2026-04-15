@@ -1,0 +1,1708 @@
+JS:
+<textarea>
+    /**
+ * annotation-layer.js — Main orchestrator.
+ * Updated for pdf.js v4.1.392
+ *
+ * Lifecycle is entirely event-bus driven:
+ *   - pagerendered   → attach overlays, render annotations
+ *   - scalechanging  → re-check overlays
+ *   - resize         → re-check overlays
+ *   - updateviewarea → track current page (for future use)
+ *   - sidebarviewchanged → sync our pane state with native sidebar
+ *   - cursortoolchanged  → sync if user changes tool via pdfjs UI
+ *
+ * The layer never programmatically clicks pdfjs buttons.
+ * Instead it dispatches events through the eventBus.
+ */
+
+import * as T from './templates.js';
+import { ToolManager, defaultTools } from './tools.js';
+import { buildStorage } from './storage.js';
+
+// ─── Helpers ──────────────────────────────────────────────────
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function pixelToNorm(pageDiv, px, py) {
+  const r = pageDiv.getBoundingClientRect();
+  return { x: clamp((px - r.left) / r.width, 0, 1), y: clamp((py - r.top) / r.height, 0, 1) };
+}
+function genId() {
+  return 'ann_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// ─── Constants ────────────────────────────────────────────────
+// pdf.js 4.1.392 sidebar view enum (matches SidebarView in pdf_sidebar.js)
+const SIDEBAR_VIEW = { NONE: 0, THUMBS: 1, OUTLINE: 2, ATTACHMENTS: 3, LAYERS: 4 };
+const CURSOR_TOOL = { SELECT: 0, HAND: 1 };
+
+// ─── AnnotationLayer ──────────────────────────────────────────
+
+export default class AnnotationLayer {
+  constructor(config) {
+    this.config = {
+      apiBaseUrl: '/api/annotations',
+      documentId: null,
+      currentUser: { name: 'Reviewer', initials: 'R' },
+      tools: null, // pass custom tools array to extend/replace
+      ...config,
+    };
+
+    this.annotations = new Map();
+    this.overlays = new Map();       // pageNumber → overlay div
+    this.elements = new Map();       // annotation id → DOM element on page
+    this.cardElements = new Map();   // annotation id → card in the pane
+
+    this.paneOpen = false;
+    this.textFilter = '';
+    this.categoryFilter = '';
+    this.selectedId = null;
+    this.pendingForm = null;         // { el, opts } while a new-comment form is open
+    this.currentPage = 1;
+    this._openingSidebar = false;    // guard: suppress sidebarviewchanged during our toggle clicks
+
+    this.store = buildStorage(this.config);
+
+    // Tool system
+    const tools = this.config.tools || defaultTools();
+    this.toolMgr = new ToolManager(tools, this);
+  }
+
+  // ── Public init ─────────────────────────────────────────────
+
+  async init() {
+    this.app = await this._waitForViewer();
+    this.eventBus = this.app.eventBus;
+
+    await this._waitForFirstPage();
+
+    this._injectCSS();
+    this._disableFeatures();
+    this._buildFloatingToolbar();
+    this._buildSidebarPane();
+    this._bindEventBus();
+    this._bindKeyboard();
+
+    // Initial overlay pass
+    this._ensureOverlays();
+
+    // Load saved annotations
+    try {
+      const saved = await this.store.load();
+      if (Array.isArray(saved)) {
+        saved.forEach(a => { a._persisted = true; this.annotations.set(a.id, a); });
+        this._renderAll();
+        this._rebuildList();
+      }
+    } catch (e) {
+      console.warn('[AnnotationLayer] Load failed:', e);
+    }
+
+    // Set initial tool
+    this.toolMgr.setActive('pointer');
+    this._syncToolbarUI();
+  }
+
+  // ── Event Bus Bindings (the core of the architecture) ───────
+
+  _bindEventBus() {
+    const eb = this.eventBus;
+
+    // Page rendered → attach overlay, render annotations for that page
+    eb.on('pagerendered', ({ pageNumber }) => {
+      requestAnimationFrame(() => {
+        this._ensureOverlays();
+        this._renderAnnotationsForPage(pageNumber);
+      });
+    });
+
+    // All pages loaded → full overlay pass
+    eb.on('pagesloaded', () => {
+      requestAnimationFrame(() => this._ensureOverlays());
+    });
+
+    // New document loaded → clear previous annotations and load fresh
+    eb.on('documentloaded', () => {
+      this._clearAll();
+      this.store.load().then(saved => {
+        if (Array.isArray(saved)) {
+          saved.forEach(a => { a._persisted = true; this.annotations.set(a.id, a); });
+          this._renderAll();
+          this._rebuildList();
+        }
+      }).catch(e => console.warn('[AnnotationLayer] Reload failed:', e));
+    });
+
+    // Pages destroyed (e.g. switching documents) → clean up overlays
+    eb.on('pagesdestroy', () => {
+      this.overlays.forEach(o => o.remove());
+      this.overlays.clear();
+      this.elements.clear();
+    });
+
+    // Scale / resize → ensure overlays exist (debounced)
+    let scaleTimer = null;
+    const onScaleOrResize = () => {
+      if (scaleTimer) cancelAnimationFrame(scaleTimer);
+      scaleTimer = requestAnimationFrame(() => { scaleTimer = null; this._ensureOverlays(); });
+    };
+    eb.on('scalechanging', onScaleOrResize);
+    eb.on('resize', onScaleOrResize);
+
+    // Track current page
+    eb.on('updateviewarea', ({ location }) => {
+      if (location && location.pageNumber) {
+        this.currentPage = location.pageNumber;
+      }
+    });
+
+    // Sidebar view changed — sync our pane visibility.
+    // In 4.1.392 the sidebar fires sidebarviewchanged with { view } where
+    // view is one of the SIDEBAR_VIEW constants.
+    eb.on('sidebarviewchanged', ({ view }) => {
+      if (this._openingSidebar) return; // we caused this, ignore it
+
+      if (view === SIDEBAR_VIEW.NONE) {
+        // Sidebar was closed entirely
+        this._onPaneClosed();
+      } else if (this.paneOpen) {
+        // A native view was selected while our pane was showing — hide ours
+        this._onPaneClosed();
+      }
+    });
+
+    // Cursor tool changed by pdfjs (e.g. user picks hand tool from secondary toolbar)
+    eb.on('cursortoolchanged', ({ tool }) => {
+      if (tool === CURSOR_TOOL.HAND && this.toolMgr.activeTool?.id !== 'hand') {
+        this._cancelForm();
+        this.toolMgr.activeTool = this.toolMgr.get('hand');
+        this._syncToolbarUI();
+      } else if (tool === CURSOR_TOOL.SELECT && this.toolMgr.activeTool?.id === 'hand') {
+        this.toolMgr.activeTool = this.toolMgr.get('pointer');
+        this._syncToolbarUI();
+      }
+    });
+
+    // Clean up stale draw state on any global mouseup
+    document.addEventListener('mouseup', () => {
+      const hl = this.toolMgr.get('highlight');
+      if (hl && hl._drawing) {
+        if (hl._drawing.el) hl._drawing.el.remove();
+        hl._drawing = null;
+      }
+    });
+  }
+
+  // ── Dispatch events into pdfjs (instead of clicking buttons) ─
+
+  dispatchCursorTool(toolId) {
+    this.eventBus.dispatch('switchcursortool', { source: this, tool: toolId });
+  }
+
+  // ── CSS injection ───────────────────────────────────────────
+
+  _injectCSS() {
+    if (document.getElementById('ann-layer-css')) return;
+    const link = document.createElement('link');
+    link.id = 'ann-layer-css';
+    link.rel = 'stylesheet';
+    const cssPath = this.config.cssPath || 'src/pdfjs-annotations.css';
+    link.href = cssPath;
+    document.head.appendChild(link);
+  }
+
+  // ── Disable unwanted pdfjs features ─────────────────────────
+
+  _disableFeatures() {
+    // Hide annotation editor UI — ids that exist in 4.1.392
+    const hide = [
+      'editorFreeText', 'editorInk', 'editorStamp', 'editorHighlight',
+      'editorModeButtons', 'editorModeSeparator',
+      'pageRotateCw', 'pageRotateCcw',
+      'secondaryOpenFile', 'presentationMode',
+      'viewBookmark', 'viewBookmarkSeparator',
+    ];
+    hide.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.style.display = 'none'; el.setAttribute('aria-hidden', 'true'); }
+    });
+
+    // Disable annotation editor mode via API
+    try {
+      this.app.pdfViewer.annotationEditorMode = { mode: -1 };
+    } catch (_) {}
+  }
+
+  // ── Floating Toolbar ────────────────────────────────────────
+
+  _buildFloatingToolbar() {
+    this.floatingTb = T.floatingToolbar(this.toolMgr.allTools);
+    document.body.appendChild(this.floatingTb);
+
+    this.floatingTb.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ann-ftool-btn');
+      if (!btn) return;
+      this.setActiveTool(btn.dataset.tool);
+    });
+  }
+
+  setActiveTool(id) {
+    this._cancelForm(); // switching tools always cancels pending work
+    this.toolMgr.setActive(id);
+    this._syncToolbarUI();
+    this._syncOverlayInteractivity();
+  }
+
+  _syncToolbarUI() {
+    const activeId = this.toolMgr.activeTool?.id;
+    this.floatingTb.querySelectorAll('.ann-ftool-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tool === activeId);
+    });
+  }
+
+  _syncOverlayInteractivity() {
+    const active = this.toolMgr.isAnnotating;
+    const overlayClass = this.toolMgr.overlayClass;
+    this.overlays.forEach(ov => {
+      ov.classList.toggle('active', active);
+      // Remove all mode-* classes, then add the current one
+      ov.className = ov.className.replace(/\bmode-\S+/g, '').trim();
+      if (active && overlayClass) {
+        ov.classList.add(overlayClass);
+      }
+    });
+  }
+
+  // ── Keyboard shortcuts ──────────────────────────────────────
+
+  _bindKeyboard() {
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+      for (const tool of this.toolMgr.tools) {
+        if (!tool.shortcut) continue;
+        if (tool.shortcut === 'escape' && e.key === 'Escape') {
+          this.setActiveTool(tool.id);
+          return;
+        }
+        if (e.key.toLowerCase() === tool.shortcut) {
+          this.setActiveTool(tool.id);
+          return;
+        }
+      }
+    });
+  }
+
+  // ── Sidebar Pane (plugs into native sidebar) ────────────────
+  //
+  // pdf.js 4.1.392 sidebar structure:
+  //   #sidebarContainer
+  //     #toolbarSidebar          (sidebar header with view radio buttons)
+  //       #sidebarViewButtons    (viewThumbnail, viewOutline, viewAttachments, viewLayers)
+  //     #sidebarContent          (contains thumbnailView, outlineView, attachmentsView, layersView)
+  //     #sidebarResizer
+  //
+  // The outer container gets class "sidebarOpen" when the sidebar is visible.
+  // The native toggle button is #sidebarToggle.
+  //
+
+  _buildSidebarPane() {
+    const container = document.getElementById('sidebarContent');
+    if (!container) { console.warn('[AnnotationLayer] No sidebar container found'); return; }
+
+    // Create our pane — starts hidden, matching the pattern of native views
+    const pane = document.createElement('div');
+    pane.id = 'ann-pane';
+    pane.className = 'hidden';
+    pane.innerHTML = T.paneHtml();
+    container.appendChild(pane);
+
+    this.paneEl = pane;
+    this.listEl = pane.querySelector('.ann-pane-list');
+
+    // Wire search and filter
+    pane.querySelector('.ann-search-input').addEventListener('input', (e) => {
+      this.textFilter = e.target.value.toLowerCase().trim();
+      this._rebuildList();
+    });
+    pane.querySelector('.ann-filter-select').addEventListener('change', (e) => {
+      this.categoryFilter = e.target.value;
+      this._rebuildList();
+    });
+
+    // Add a "Comments" button to the sidebar view buttons radio group.
+    // In 4.1.392 the view buttons live in #sidebarViewButtons.
+    const viewButtons = document.getElementById('sidebarViewButtons');
+    if (viewButtons) {
+      const commentsBtn = document.createElement('button');
+      commentsBtn.id = 'viewComments';
+      commentsBtn.className = 'toolbarButton';
+      commentsBtn.title = 'Show Comments';
+      commentsBtn.tabIndex = 6;
+      commentsBtn.setAttribute('role', 'radio');
+      commentsBtn.setAttribute('aria-checked', 'false');
+      commentsBtn.setAttribute('aria-controls', 'ann-pane');
+      commentsBtn.innerHTML = `<span>Comments</span>`;
+      commentsBtn.addEventListener('click', () => this._activateCommentsView());
+      viewButtons.appendChild(commentsBtn);
+      this._sidebarViewBtn = commentsBtn;
+    }
+
+    // Also add a dedicated toggle button in the main toolbar for quick access
+    const btn = document.createElement('button');
+    btn.id = 'ann-sidebar-btn';
+    btn.innerHTML = T.BUBBLE_SVG;
+    btn.title = 'Comments';
+    btn.type = 'button';
+    btn.addEventListener('click', () => this.togglePane());
+
+    const toolbarLeft = document.getElementById('toolbarViewerLeft');
+    const nativeToggle = document.getElementById('sidebarToggle');
+
+    if (toolbarLeft && nativeToggle && nativeToggle.parentNode === toolbarLeft) {
+      // Insert after sidebarToggle + spacer
+      const spacer = nativeToggle.nextElementSibling;
+      const ref = spacer && spacer.classList.contains('toolbarButtonSpacer')
+        ? spacer.nextSibling
+        : nativeToggle.nextSibling;
+      toolbarLeft.insertBefore(btn, ref);
+    } else if (toolbarLeft) {
+      toolbarLeft.appendChild(btn);
+    }
+    this._sbBtn = btn;
+  }
+
+  /**
+   * Activate the comments view within the native sidebar system.
+   * Hides all native view divs, shows ours, updates button states,
+   * and opens the sidebar if it's closed.
+   */
+  _activateCommentsView() {
+    this.paneOpen = true;
+    this._sbBtn?.classList.add('active');
+
+    this._applyCommentsViewState();
+
+    // If sidebar isn't open, open it via the native toggle.
+    // The sidebarToggle click fires sidebarviewchanged synchronously
+    // (switching to THUMBS). We suppress that with the _openingSidebar flag.
+    const outer = document.getElementById('outerContainer');
+    if (outer && !outer.classList.contains('sidebarOpen')) {
+      const tog = document.getElementById('sidebarToggle');
+      if (tog) {
+        this._openingSidebar = true;
+        tog.click();
+        this._openingSidebar = false;
+        // Re-apply after pdfjs switchView has run
+        requestAnimationFrame(() => this._applyCommentsViewState());
+      }
+    }
+
+    this._rebuildList();
+  }
+
+  /**
+   * Set the sidebar content to show comments and nothing else.
+   * Safe to call multiple times.
+   */
+  _applyCommentsViewState() {
+    // Hide all native view content divs (4.1.392 ids)
+    ['thumbnailView', 'outlineView', 'attachmentsView', 'layersView'].forEach(id => {
+      const v = document.getElementById(id);
+      if (v) v.classList.add('hidden');
+    });
+
+    // Deselect all native sidebar view buttons
+    ['viewThumbnail', 'viewOutline', 'viewAttachments', 'viewLayers'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.classList.remove('toggled');
+        btn.setAttribute('aria-checked', 'false');
+      }
+    });
+
+    // Show our pane and select our button
+    this.paneEl.classList.remove('hidden');
+    if (this._sidebarViewBtn) {
+      this._sidebarViewBtn.classList.add('toggled');
+      this._sidebarViewBtn.setAttribute('aria-checked', 'true');
+    }
+
+    // Hide the outline options container (only relevant for outline view)
+    const outlineOpts = document.getElementById('outlineOptionsContainer');
+    if (outlineOpts) outlineOpts.style.display = 'none';
+  }
+
+  /**
+   * Called when pdfjs closes the sidebar or switches to a native view.
+   * We just mark ourselves as hidden — we never touch the sidebar toggle.
+   */
+  _onPaneClosed() {
+    if (!this.paneOpen) return;
+    this.paneOpen = false;
+    this._cancelForm();
+    this.paneEl.classList.add('hidden');
+    this._sbBtn?.classList.remove('active');
+    if (this._sidebarViewBtn) {
+      this._sidebarViewBtn.classList.remove('toggled');
+      this._sidebarViewBtn.setAttribute('aria-checked', 'false');
+    }
+    // Restore outline options visibility (it manages itself, but reset just in case)
+    const outlineOpts = document.getElementById('outlineOptionsContainer');
+    if (outlineOpts) outlineOpts.style.display = '';
+  }
+
+  /**
+   * Open the comments pane (idempotent — does nothing if already open).
+   */
+  openPane() {
+    if (this.paneOpen) return;
+    this._activateCommentsView();
+  }
+
+  /**
+   * Close the comments pane. Closes the entire sidebar since we
+   * don't know which native view the user was looking at before.
+   */
+  closePane() {
+    if (!this.paneOpen) return;
+    this._onPaneClosed();
+    // Close the sidebar entirely
+    const outer = document.getElementById('outerContainer');
+    if (outer && outer.classList.contains('sidebarOpen')) {
+      const tog = document.getElementById('sidebarToggle');
+      if (tog) {
+        this._openingSidebar = true;
+        tog.click();
+        this._openingSidebar = false;
+      }
+    }
+  }
+
+  togglePane() {
+    if (this.paneOpen) this.closePane(); else this.openPane();
+  }
+
+  // ── New-comment form (in-flow in the pane list) ─────────────
+
+  showNewForm(opts) {
+    if (this.pendingForm) {
+      const ta = this.pendingForm.el.querySelector('textarea');
+      if (ta && ta.value.trim()) {
+        this.pendingForm.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
+      this._cancelForm();
+    }
+
+    this._rebuildList();
+
+    const formEl = T.newFormElement(opts);
+    this._insertFormInFlow(formEl, opts.page, opts.y || 0);
+    this.pendingForm = { el: formEl, opts };
+
+    const textarea = formEl.querySelector('textarea');
+    const catSelect = formEl.querySelector('.ann-new-form-cat');
+
+    setTimeout(() => textarea.focus(), 60);
+
+    formEl.querySelector('.cancel').addEventListener('click', () => this._cancelForm());
+    formEl.querySelector('.save').addEventListener('click', () => {
+      const cat = catSelect.value;
+      if (!cat) { catSelect.classList.add('error'); catSelect.focus(); return; }
+      const text = textarea.value.trim();
+      if (!text) { textarea.focus(); return; }
+      this._addAnnotation({
+        type: opts.type, page: opts.page,
+        x: opts.x, y: opts.y,
+        width: opts.width || 0, height: opts.height || 0,
+        text, category: cat,
+      });
+      this.pendingForm = null;
+      formEl.remove();
+    });
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); formEl.querySelector('.save').click(); }
+      if (e.key === 'Escape') this._cancelForm();
+    });
+    catSelect.addEventListener('change', () => catSelect.classList.remove('error'));
+
+    formEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  _cancelForm() {
+    if (this.pendingForm) {
+      this.pendingForm.el.remove();
+      this.pendingForm = null;
+    }
+  }
+
+  _insertFormInFlow(formEl, page, y) {
+    const list = this.listEl;
+    const children = list.children;
+    let curPage = -1;
+
+    for (let i = 0; i < children.length; i++) {
+      const ch = children[i];
+      if (ch.classList.contains('ann-page-sep')) {
+        const sepPage = parseInt(ch.textContent.replace(/\D/g, ''), 10);
+        if (sepPage > page) {
+          list.insertBefore(formEl, ch);
+          return;
+        }
+        curPage = sepPage;
+      } else if (ch.classList.contains('ann-card') && curPage === page) {
+        const cardY = parseFloat(ch.dataset.annY || '0');
+        if (cardY > y) {
+          list.insertBefore(formEl, ch);
+          return;
+        }
+      }
+    }
+
+    if (curPage !== page) {
+      list.appendChild(T.pageSeparator(page));
+    }
+    list.appendChild(formEl);
+  }
+
+  // ── Pane list rendering (with page separators) ──────────────
+
+  _getReplies(parentId) {
+    const out = [];
+    this.annotations.forEach(a => { if (a.parentId === parentId) out.push(a); });
+    return out.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  }
+
+  _rebuildList() {
+    const list = this.listEl;
+    list.innerHTML = '';
+    this.cardElements.clear();
+
+    const topLevel = [];
+    this.annotations.forEach(a => { if (!a.parentId) topLevel.push(a); });
+    topLevel.sort((a, b) => a.page !== b.page ? a.page - b.page : a.y - b.y);
+
+    const filtered = topLevel.filter(a => {
+      if (this.categoryFilter && a.category !== this.categoryFilter) return false;
+      if (!this.textFilter) return true;
+      const haystack = [
+        a.text, a.author, a.category, 'page ' + a.page, a.type,
+        ...this._getReplies(a.id).map(r => r.text + ' ' + r.author),
+      ].join(' ').toLowerCase();
+      return haystack.includes(this.textFilter);
+    });
+
+    if (!filtered.length) {
+      list.innerHTML = `<div class="ann-pane-empty">${
+        this.textFilter || this.categoryFilter
+          ? 'No comments match your filters.'
+          : 'No comments yet.<br/>Use the toolbar to add comments or highlights.'
+      }</div>`;
+      if (this.pendingForm) this._insertFormInFlow(this.pendingForm.el, this.pendingForm.opts.page, this.pendingForm.opts.y || 0);
+      return;
+    }
+
+    let curPage = -1;
+    filtered.forEach(ann => {
+      if (ann.page !== curPage) {
+        curPage = ann.page;
+        list.appendChild(T.pageSeparator(curPage));
+      }
+      const card = this._buildCard(ann);
+      list.appendChild(card);
+      this.cardElements.set(ann.id, card);
+    });
+
+    if (this.pendingForm) {
+      this._insertFormInFlow(this.pendingForm.el, this.pendingForm.opts.page, this.pendingForm.opts.y || 0);
+    }
+  }
+
+  _buildCard(ann) {
+    const card = T.cardElement(ann, this.config.currentUser);
+    if (ann.id === this.selectedId) card.classList.add('sel');
+
+    card.addEventListener('click', (e) => {
+      const action = e.target.closest('.ann-card-action');
+      if (action) {
+        e.stopPropagation();
+        const act = action.dataset.action;
+        if (act === 'reply') this._showReplyInput(ann.id, card);
+        else if (act === 'edit') this._editAnnotation(ann.id);
+        else if (act === 'delete') this._deleteAnnotation(ann.id);
+        return;
+      }
+      if (e.target.closest('.ann-reply-input') || e.target.closest('textarea')) return;
+      this._scrollToAnnotation(ann.id);
+      this._selectAnnotation(ann.id);
+    });
+
+    const replies = this._getReplies(ann.id);
+    if (replies.length) {
+      const repliesDiv = document.createElement('div');
+      repliesDiv.className = 'ann-replies';
+      replies.forEach(r => repliesDiv.appendChild(T.replyElement(r, this.config.currentUser)));
+      card.appendChild(repliesDiv);
+    }
+
+    return card;
+  }
+
+  _showReplyInput(parentId, card) {
+    if (card.querySelector('.ann-reply-input')) return;
+    let repliesDiv = card.querySelector('.ann-replies');
+    if (!repliesDiv) {
+      repliesDiv = document.createElement('div');
+      repliesDiv.className = 'ann-replies';
+      card.appendChild(repliesDiv);
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'ann-reply-input';
+    wrap.innerHTML = T.replyInputHtml();
+    repliesDiv.appendChild(wrap);
+
+    const ta = wrap.querySelector('.ann-reply-textarea');
+    const sendBtn = wrap.querySelector('.ann-reply-send');
+    setTimeout(() => ta.focus(), 30);
+
+    const send = async () => {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); return; }
+      const parent = this.annotations.get(parentId);
+      await this._addAnnotation({
+        type: 'comment', parentId,
+        page: parent ? parent.page : 1,
+        x: 0, y: 0, text, category: null,
+      });
+      wrap.remove();
+    };
+
+    sendBtn.addEventListener('click', send);
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      if (e.key === 'Escape') wrap.remove();
+    });
+  }
+
+  // ── Page overlays ───────────────────────────────────────────
+
+  _ensureOverlays() {
+    document.querySelectorAll('.page[data-page-number]').forEach(pageDiv => {
+      const pageNum = parseInt(pageDiv.dataset.pageNumber, 10);
+
+      if (this.overlays.has(pageNum)) {
+        const existing = this.overlays.get(pageNum);
+        if (!pageDiv.contains(existing)) {
+          pageDiv.style.position = 'relative';
+          pageDiv.appendChild(existing);
+        }
+        return;
+      }
+
+      const overlay = document.createElement('div');
+      overlay.className = 'ann-overlay';
+      overlay.dataset.annPage = pageNum;
+      pageDiv.style.position = 'relative';
+      pageDiv.appendChild(overlay);
+      this.overlays.set(pageNum, overlay);
+
+      this._bindOverlay(overlay, pageNum, pageDiv);
+      this._renderAnnotationsForPage(pageNum);
+      this._syncOverlayInteractivity();
+    });
+  }
+
+  _bindOverlay(overlay, pageNum, pageDiv) {
+    const makeCtx = (e) => ({
+      pageNumber: pageNum,
+      pageDiv,
+      overlay,
+      norm: pixelToNorm(pageDiv, e.clientX, e.clientY),
+      layer: this,
+    });
+
+    overlay.addEventListener('click', (e) => {
+      this.toolMgr.dispatch('onPageClick', makeCtx(e), e);
+    });
+    overlay.addEventListener('mousedown', (e) => {
+      this.toolMgr.dispatch('onPageMouseDown', makeCtx(e), e);
+    });
+    overlay.addEventListener('mousemove', (e) => {
+      this.toolMgr.dispatch('onPageMouseMove', makeCtx(e), e);
+    });
+    overlay.addEventListener('mouseup', (e) => {
+      this.toolMgr.dispatch('onPageMouseUp', makeCtx(e), e);
+    });
+  }
+
+  // ── Render annotations on pages ─────────────────────────────
+
+  _renderAll() {
+    this.annotations.forEach(a => { if (!a.parentId) this._renderAnnotation(a); });
+  }
+
+  _renderAnnotationsForPage(pageNum) {
+    this.annotations.forEach(a => {
+      if (a.page === pageNum && !a.parentId) this._renderAnnotation(a);
+    });
+  }
+
+  _renderAnnotation(ann) {
+    const existing = this.elements.get(ann.id);
+    if (existing) existing.remove();
+
+    const overlay = this.overlays.get(ann.page);
+    if (!overlay) return;
+
+    let el;
+    if (ann.type === 'comment') {
+      el = document.createElement('div');
+      el.className = 'ann-pin';
+      el.style.left = (ann.x * 100) + '%';
+      el.style.top = (ann.y * 100) + '%';
+      el.innerHTML = T.BUBBLE_SVG;
+      el.title = ann.text || '';
+    } else if (ann.type === 'highlight') {
+      el = document.createElement('div');
+      el.className = 'ann-hl';
+      el.style.left = (ann.x * 100) + '%';
+      el.style.top = (ann.y * 100) + '%';
+      el.style.width = (ann.width * 100) + '%';
+      el.style.height = (ann.height * 100) + '%';
+      el.title = ann.text || '';
+    }
+
+    if (!el) return;
+
+    el.dataset.annId = ann.id;
+    if (ann.id === this.selectedId) el.classList.add('sel');
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._selectAnnotation(ann.id);
+      this.openPane();
+      this._scrollToCard(ann.id);
+    });
+
+    overlay.appendChild(el);
+    this.elements.set(ann.id, el);
+  }
+
+  // ── CRUD ────────────────────────────────────────────────────
+
+  async _addAnnotation(data) {
+    const user = this.config.currentUser;
+    const ann = {
+      id: genId(),
+      type: data.type,
+      parentId: data.parentId || null,
+      page: data.page,
+      x: data.x, y: data.y,
+      width: data.width || 0, height: data.height || 0,
+      text: data.text || '',
+      category: data.category || null,
+      author: user.name || 'Reviewer',
+      authorInitials: user.initials || T.initials(user.name || 'Reviewer'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      _persisted: false,
+    };
+
+    this.annotations.set(ann.id, ann);
+    if (!ann.parentId) this._renderAnnotation(ann);
+    this._rebuildList();
+
+    try {
+      const saved = await this.store.save(ann);
+      if (saved?.id && saved.id !== ann.id) {
+        this.annotations.delete(ann.id);
+        ann.id = saved.id;
+        this.annotations.set(ann.id, ann);
+      }
+      ann._persisted = true;
+    } catch (e) {
+      console.error('[AnnotationLayer] Save failed:', e);
+    }
+
+    if (!ann.parentId) {
+      this._selectAnnotation(ann.id);
+      setTimeout(() => this._scrollToCard(ann.id), 100);
+    }
+  }
+
+  async _deleteAnnotation(id) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+
+    this._getReplies(id).forEach(r => {
+      this.annotations.delete(r.id);
+      this.store.remove(r.id).catch(() => {});
+    });
+
+    const el = this.elements.get(id);
+    if (el) el.remove();
+    this.elements.delete(id);
+    this.annotations.delete(id);
+    if (this.selectedId === id) this.selectedId = null;
+    this._rebuildList();
+
+    try { await this.store.remove(id); } catch (e) { console.error('[AnnotationLayer] Delete failed:', e); }
+  }
+
+  _editAnnotation(id) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+    const card = this.cardElements.get(id);
+    if (!card) return;
+
+    const textDiv = card.querySelector('.ann-card-text');
+    textDiv.innerHTML = T.editFormHtml(ann.text || '');
+
+    const ta = textDiv.querySelector('.ann-edit-textarea');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+
+    const finish = async (save) => {
+      if (save) {
+        ann.text = ta.value.trim();
+        ann.updatedAt = new Date().toISOString();
+        try { await this.store.save(ann); } catch (_) {}
+      }
+      this._rebuildList();
+      if (!ann.parentId) this._renderAnnotation(ann);
+    };
+
+    textDiv.querySelector('.ann-edit-cancel').addEventListener('click', () => finish(false));
+    textDiv.querySelector('.ann-edit-save').addEventListener('click', () => finish(true));
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') finish(false);
+    });
+  }
+
+  // ── Selection & navigation ──────────────────────────────────
+
+  _selectAnnotation(id) {
+    const prevId = this.selectedId;
+    this.selectedId = id;
+
+    [prevId, id].forEach(annId => {
+      if (!annId) return;
+      const el = this.elements.get(annId);
+      if (el) el.classList.toggle('sel', annId === id);
+      const card = this.cardElements.get(annId);
+      if (card) card.classList.toggle('sel', annId === id);
+    });
+  }
+
+  _scrollToAnnotation(id) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+    if (this.app?.pdfViewer) {
+      this.app.pdfViewer.currentPageNumber = ann.page;
+    }
+    setTimeout(() => {
+      const el = this.elements.get(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  }
+
+  _scrollToCard(id) {
+    const card = this.cardElements.get(id);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ── Viewer wait helpers ─────────────────────────────────────
+
+  _waitForViewer() {
+    return new Promise(resolve => {
+      const check = () => {
+        if (window.PDFViewerApplication?.pdfViewer) resolve(window.PDFViewerApplication);
+        else requestAnimationFrame(check);
+      };
+      check();
+    });
+  }
+
+  _waitForFirstPage() {
+    return new Promise(resolve => {
+      const check = () => {
+        if (document.querySelector('.page[data-page-number]')) resolve();
+        else requestAnimationFrame(check);
+      };
+      this.eventBus.on('pagesloaded', () => setTimeout(check, 50));
+      check();
+    });
+  }
+
+  // ── Internal cleanup ─────────────────────────────────────────
+
+  _clearAll() {
+    this._cancelForm();
+    this.elements.forEach(el => el.remove());
+    this.elements.clear();
+    this.annotations.clear();
+    this.cardElements.clear();
+    this.selectedId = null;
+    if (this.listEl) this.listEl.innerHTML = '';
+  }
+
+  // ── Public API ──────────────────────────────────────────────
+
+  getAnnotations() {
+    return [...this.annotations.values()].map(({ _persisted, ...rest }) => rest);
+  }
+
+  addAnnotation(data) {
+    return this._addAnnotation(data);
+  }
+
+  destroy() {
+    this.overlays.forEach(o => o.remove());
+    this.overlays.clear();
+    this.elements.clear();
+    this.annotations.clear();
+    document.getElementById('ann-layer-css')?.remove();
+    this.paneEl?.remove();
+    this.floatingTb?.remove();
+    this._sbBtn?.remove();
+    if (this._sidebarViewBtn) this._sidebarViewBtn.remove();
+  }
+}
+
+</textarea>
+CSS:
+<textarea>
+    /*
+ * pdfjs-annotations.css
+ * Updated for pdf.js v4.1.392
+ *
+ * Uses pdfjs CSS custom properties so the annotation layer
+ * inherits the viewer's light / dark / high-contrast theme.
+ *
+ * Fallbacks after each var() are the light-mode values so
+ * the file works standalone during development.
+ */
+
+/* ── Annotation overlays (per-page, sits above canvas) ───── */
+
+.ann-overlay {
+  position: absolute; inset: 0;
+  pointer-events: none; z-index: 5;
+}
+.ann-overlay.active {
+  pointer-events: auto; cursor: crosshair;
+}
+.ann-overlay.active.mode-comment {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C6.48 2 2 5.58 2 10c0 2.5 1.35 4.7 3.48 6.17-.2 1.6-1.1 3.04-2.2 4.08-.23.21-.07.58.24.58 2.3 0 4.18-1.02 5.38-2.03.7.13 1.42.2 2.1.2 5.52 0 10-3.58 10-8s-4.48-8-10-8z' fill='%234393F5' opacity='0.9'/%3E%3C/svg%3E") 6 18, crosshair;
+}
+
+/* ── Comment pin (chat-bubble on the page) ───────────────── */
+
+.ann-pin {
+  position: absolute;
+  width: 26px; height: 26px;
+  transform: translate(-6px, -24px);
+  pointer-events: auto; cursor: pointer;
+  filter: drop-shadow(1px 2px 3px rgba(0,0,0,0.25));
+  transition: transform 0.15s ease, filter 0.15s ease;
+  z-index: 6;
+  color: #4393F5;
+}
+.ann-pin svg { width: 26px; height: 26px; }
+.ann-pin:hover {
+  transform: translate(-6px, -26px) scale(1.12);
+  filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.3));
+}
+.ann-pin.sel {
+  transform: translate(-6px, -26px) scale(1.15);
+  filter: drop-shadow(2px 4px 8px rgba(0,0,0,0.35));
+}
+
+/* ── Highlight rectangle ─────────────────────────────────── */
+
+.ann-hl {
+  position: absolute;
+  pointer-events: auto; cursor: pointer;
+  border: 2px solid rgba(255,193,7,0.65);
+  background: rgba(255,235,59,0.30);
+  border-radius: 2px;
+  transition: background 0.15s, border-color 0.15s;
+  z-index: 5;
+}
+.ann-hl:hover, .ann-hl.sel {
+  background: rgba(255,235,59,0.48);
+  border-color: rgba(255,152,0,0.85);
+}
+
+/* ── Drawing-in-progress rectangle ───────────────────────── */
+
+.ann-draw-rect {
+  position: absolute;
+  border: 2px dashed rgba(255,152,0,0.8);
+  background: rgba(255,235,59,0.18);
+  border-radius: 2px;
+  pointer-events: none; z-index: 7;
+}
+
+/* ── Floating toolbar (right edge) ───────────────────────── */
+
+#ann-floating-toolbar {
+  position: fixed; right: 16px; top: 50%;
+  transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 2px;
+  background: #2b2b2f; border-radius: 10px; padding: 6px;
+  z-index: 6000;  /* below pdfjs secondaryToolbar (30000) and popups */
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.06);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.ann-ftool-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border: none; border-radius: 7px;
+  background: transparent; cursor: pointer; padding: 0;
+  color: rgba(255,255,255,0.65);
+  position: relative; transition: all 0.12s;
+}
+.ann-ftool-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.ann-ftool-btn.active {
+  background: rgba(255,255,255,0.18); color: #fff;
+  box-shadow: inset 0 0 0 1.5px rgba(100,160,255,0.6);
+}
+.ann-ftool-btn svg { width: 20px; height: 20px; }
+.ann-ftool-sep { height: 1px; margin: 3px 4px; background: rgba(255,255,255,0.12); }
+.ann-ftool-tip {
+  display: none; position: absolute;
+  right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  background: #1e1e22; color: #eee;
+  padding: 4px 10px; border-radius: 6px; font-size: 11px;
+  white-space: nowrap; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.ann-ftool-btn:hover .ann-ftool-tip { display: block; }
+
+/* ── Sidebar toggle button (in the pdfjs toolbar) ────────── */
+
+#ann-sidebar-btn {
+  display: flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 28px;
+  border: none; border-radius: 4px;
+  background: transparent; cursor: pointer;
+  color: var(--toolbar-icon-bg-color, rgba(0,0,0,0.7));
+  padding: 0 4px; transition: all 0.12s; margin-left: 2px;
+}
+#ann-sidebar-btn:hover {
+  background: var(--button-hover-color, rgba(0,0,0,0.07));
+}
+#ann-sidebar-btn.active { color: #4393F5; }
+#ann-sidebar-btn svg { width: 20px; height: 20px; }
+
+/* ── Comments button in sidebar view buttons ─────────────── */
+/* In 4.1.392, sidebar view buttons use .toolbarButton inside
+   #sidebarViewButtons. Our #viewComments button matches that pattern
+   and uses the same .toggled class for the active state. We add a
+   speech-bubble icon via CSS since the button only has a <span>. */
+
+#viewComments {
+  /* Match the pdfjs toolbar button styling */
+}
+#viewComments::before {
+  /* Use the same mask-image technique pdfjs uses for its icons.
+     This draws a speech-bubble glyph that inherits the theme color. */
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C6.48 2 2 5.58 2 10c0 2.5 1.35 4.7 3.48 6.17-.2 1.6-1.1 3.04-2.2 4.08-.23.21-.07.58.24.58 2.3 0 4.18-1.02 5.38-2.03.7.13 1.42.2 2.1.2 5.52 0 10-3.58 10-8s-4.48-8-10-8z'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C6.48 2 2 5.58 2 10c0 2.5 1.35 4.7 3.48 6.17-.2 1.6-1.1 3.04-2.2 4.08-.23.21-.07.58.24.58 2.3 0 4.18-1.02 5.38-2.03.7.13 1.42.2 2.1.2 5.52 0 10-3.58 10-8s-4.48-8-10-8z'/%3E%3C/svg%3E");
+  -webkit-mask-size: cover;
+  mask-size: cover;
+}
+
+/* ── Comments pane (inside pdfjs sidebar) ────────────────── */
+
+#ann-pane {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%;
+  background: var(--sidebar-toolbar-bg-color, #f5f6f7);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  color: var(--field-color, #060606);
+}
+#ann-pane.hidden { display: none; }
+
+/* ── Pane header ─────────────────────────────────────────── */
+
+.ann-pane-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--toolbar-border-color, #bbb);
+  background: var(--toolbar-bg-color, #f9f9fa);
+  flex-shrink: 0;
+}
+.ann-pane-header h3 {
+  margin: 0; font-size: 13px; font-weight: 600;
+  color: var(--main-color, #0c0c0d);
+}
+
+/* ── Pane toolbar (search + filter) ──────────────────────── */
+
+.ann-pane-toolbar {
+  display: flex; gap: 6px; align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--toolbar-border-color, #bbb);
+  flex-shrink: 0;
+  background: var(--sidebar-toolbar-bg-color, #f5f6f7);
+}
+.ann-pane-toolbar .ann-search-input {
+  flex: 1;
+  padding: 5px 8px 5px 28px;
+  border: 1px solid var(--field-border-color, #bbbbc);
+  border-radius: 5px; font-size: 12px; outline: none;
+  color: var(--field-color, #060606);
+  background: var(--field-bg-color, #fff) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16' y2='16'/%3E%3C/svg%3E") 7px center no-repeat;
+}
+.ann-pane-toolbar .ann-search-input:focus {
+  border-color: #4393F5;
+}
+.ann-pane-toolbar .ann-filter-select {
+  padding: 4px 6px;
+  border: 1px solid var(--field-border-color, #bbbbc);
+  border-radius: 5px; font-size: 11px;
+  background: var(--field-bg-color, #fff);
+  color: var(--field-color, #060606);
+  outline: none; cursor: pointer;
+}
+
+/* ── Pane list ───────────────────────────────────────────── */
+
+.ann-pane-list { flex: 1; overflow-y: auto; padding: 0; }
+.ann-pane-empty {
+  padding: 32px 16px; text-align: center;
+  color: var(--toggled-btn-color, #777);
+  font-size: 12px; line-height: 1.5;
+}
+
+/* ── Page separator (sticky) ─────────────────────────────── */
+
+.ann-page-sep {
+  padding: 4px 12px;
+  font-size: 10px; font-weight: 700;
+  color: var(--main-color, #0c0c0d);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  background: var(--toolbar-bg-color, #f9f9fa);
+  border-bottom: 1px solid var(--toolbar-border-color, #bbb);
+  border-top: 1px solid var(--toolbar-border-color, #bbb);
+  position: sticky; top: 0;
+}
+
+/* ── Comment card ────────────────────────────────────────── */
+
+.ann-card {
+  margin: 0;
+  padding: 12px 12px 10px;
+  background: var(--field-bg-color, #fff);
+  border-bottom: 1px solid var(--toolbar-border-color, #e0e0e4);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ann-card:hover { background: var(--button-hover-color, rgba(0,0,0,0.04)); }
+.ann-card.sel {
+  background: var(--button-hover-color, rgba(0,0,0,0.04));
+  box-shadow: inset 3px 0 0 #4393F5;
+}
+
+.ann-card-top { display: flex; align-items: center; gap: 8px; }
+.ann-card-avatar {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #5b7a9d; color: #fff;
+  font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.ann-card-meta { flex: 1; min-width: 0; }
+.ann-card-author {
+  font-size: 12px; font-weight: 600;
+  color: var(--main-color, #0c0c0d);
+  line-height: 1.3;
+}
+.ann-card-subtitle {
+  font-size: 10px;
+  color: var(--toggled-btn-color, #777);
+  margin-top: 1px;
+}
+.ann-card-cat {
+  display: inline-block;
+  padding: 1px 6px; border-radius: 8px;
+  font-size: 9px; font-weight: 700;
+  letter-spacing: 0.03em; line-height: 1.5;
+  border: 1px solid; margin-left: 6px;
+}
+.ann-card-text {
+  font-size: 12.5px;
+  color: var(--field-color, #333);
+  line-height: 1.5;
+  word-break: break-word;
+  margin: 6px 0 0 32px;
+}
+.ann-card-date {
+  font-size: 10px;
+  color: var(--toggled-btn-color, #999);
+  margin: 4px 0 0 32px;
+}
+
+/* ── Card actions (appear on hover, below text) ──────────── */
+
+.ann-card-actions {
+  display: flex; align-items: center; gap: 2px;
+  margin: 6px 0 0 32px;
+  opacity: 0; transition: opacity 0.12s;
+}
+.ann-card:hover .ann-card-actions { opacity: 1; }
+.ann-card-action {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 8px; border: none; background: transparent;
+  cursor: pointer;
+  color: var(--toggled-btn-color, #888);
+  font-size: 10px; font-weight: 500;
+  border-radius: 4px; transition: all 0.1s;
+}
+.ann-card-action:hover {
+  background: var(--button-hover-color, rgba(0,0,0,0.07));
+  color: var(--main-color, #333);
+}
+.ann-card-action svg { width: 12px; height: 12px; }
+
+/* ── Replies ─────────────────────────────────────────────── */
+
+.ann-replies {
+  margin: 8px 0 0 32px; padding-left: 10px;
+  border-left: 2px solid var(--toolbar-border-color, #ddd);
+}
+.ann-reply { margin-bottom: 6px; }
+.ann-reply-header { display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
+.ann-reply-avatar {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #8a9ab5; color: #fff;
+  font-size: 8px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.ann-reply-author { font-size: 11px; font-weight: 600; color: var(--main-color, #333); }
+.ann-reply-time { font-size: 9px; color: var(--toggled-btn-color, #aaa); }
+.ann-reply-text {
+  font-size: 12px; color: var(--field-color, #444);
+  line-height: 1.4; margin-left: 23px; word-break: break-word;
+}
+.ann-reply-input { display: flex; gap: 4px; margin-top: 4px; align-items: flex-start; }
+.ann-reply-textarea {
+  flex: 1;
+  border: 1px solid var(--field-border-color, #ccc);
+  border-radius: 5px; padding: 5px 8px;
+  font-size: 12px; font-family: inherit;
+  outline: none; resize: none;
+  min-height: 28px; max-height: 80px;
+  color: var(--field-color, #333);
+  background: var(--field-bg-color, #fff);
+}
+.ann-reply-textarea:focus { border-color: #4393F5; }
+.ann-reply-send {
+  padding: 5px 10px; border: none; border-radius: 5px;
+  background: #4393F5; color: #fff;
+  font-size: 11px; font-weight: 600;
+  cursor: pointer; flex-shrink: 0;
+}
+.ann-reply-send:hover { background: #2b7de9; }
+
+/* ── New-comment form (appears in-flow in the list) ──────── */
+
+.ann-new-form {
+  margin: 0; padding: 12px;
+  border-bottom: 2px solid #4393F5;
+  background: var(--field-bg-color, #fff);
+}
+.ann-new-form-title {
+  font-size: 11px; font-weight: 600;
+  color: var(--toggled-btn-color, #555);
+  margin-bottom: 6px;
+}
+.ann-new-form select {
+  width: 100%; padding: 5px 8px;
+  border: 1px solid var(--field-border-color, #ccc);
+  border-radius: 5px; font-size: 12px; font-family: inherit;
+  outline: none; margin-bottom: 6px;
+  background: var(--field-bg-color, #fff);
+  color: var(--field-color, #333);
+}
+.ann-new-form select:focus { border-color: #4393F5; }
+.ann-new-form select.error { border-color: #dc2626; }
+.ann-new-form textarea {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid var(--field-border-color, #ccc);
+  border-radius: 5px; padding: 8px;
+  font-size: 12px; font-family: inherit;
+  resize: vertical; min-height: 56px; outline: none;
+  color: var(--field-color, #333);
+  background: var(--field-bg-color, #fff);
+}
+.ann-new-form textarea:focus { border-color: #4393F5; }
+.ann-new-form-actions {
+  display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px;
+}
+.ann-new-form-actions button {
+  padding: 5px 14px; border-radius: 5px;
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--field-border-color, #bbb);
+  background: var(--field-bg-color, #fff);
+  color: var(--field-color, #555);
+}
+.ann-new-form-actions button:hover {
+  background: var(--button-hover-color, rgba(0,0,0,0.04));
+}
+.ann-new-form-actions button.primary {
+  background: #4393F5; color: #fff; border-color: #2b7de9;
+}
+.ann-new-form-actions button.primary:hover { background: #2b7de9; }
+
+/* ── Inline edit form ────────────────────────────────────── */
+
+.ann-edit-textarea {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid var(--field-border-color, #ccc);
+  border-radius: 5px; padding: 6px 8px;
+  font-size: 12px; font-family: inherit;
+  resize: vertical; min-height: 42px; outline: none;
+  color: var(--field-color, #333);
+  background: var(--field-bg-color, #fff);
+}
+.ann-edit-textarea:focus { border-color: #4393F5; }
+.ann-edit-actions {
+  display: flex; justify-content: flex-end; gap: 4px; margin-top: 4px;
+}
+.ann-edit-actions button {
+  padding: 3px 10px; border-radius: 4px;
+  font-size: 11px; cursor: pointer;
+}
+.ann-edit-cancel {
+  border: 1px solid var(--field-border-color, #bbb);
+  background: var(--field-bg-color, #fff);
+  color: var(--field-color, #555);
+}
+.ann-edit-save {
+  border: 1px solid #2b7de9;
+  background: #4393F5; color: #fff; font-weight: 600;
+}
+
+/* ── Suppress pdfjs built-in annotation editor ───────────── */
+
+.annotationEditorLayer { display: none !important; }
+
+</textarea>
+storage:
+<textarea>
+    /**
+ * storage.js — Pluggable persistence adapters.
+ */
+
+export function restStorage(apiBaseUrl, documentId) {
+  const base = apiBaseUrl.replace(/\/$/, '');
+  const docPath = `${base}/${encodeURIComponent(documentId)}`;
+
+  return {
+    async load() {
+      const r = await fetch(docPath);
+      if (!r.ok) throw new Error(`Load failed: ${r.status}`);
+      return r.json();
+    },
+    async save(annotation) {
+      const method = annotation._persisted ? 'PUT' : 'POST';
+      const url = annotation._persisted
+        ? `${docPath}/${encodeURIComponent(annotation.id)}`
+        : docPath;
+      const r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(annotation),
+      });
+      if (!r.ok) throw new Error(`Save failed: ${r.status}`);
+      return r.json();
+    },
+    async remove(annotationId) {
+      const r = await fetch(`${docPath}/${encodeURIComponent(annotationId)}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+    },
+  };
+}
+
+export function memoryStorage() {
+  return {
+    load: () => Promise.resolve([]),
+    save: (a) => Promise.resolve(a),
+    remove: () => Promise.resolve(),
+  };
+}
+
+export function buildStorage(config) {
+  if (config.onSave && config.onLoad) {
+    return {
+      load: config.onLoad.bind(null, config.documentId),
+      save: config.onSave,
+      remove: config.onDelete || (() => Promise.resolve()),
+    };
+  }
+  if (config.documentId && config.apiBaseUrl) {
+    return restStorage(config.apiBaseUrl, config.documentId);
+  }
+  return memoryStorage();
+}
+
+</textarea>
+
+Templates:
+<textarea>
+    /**
+ * templates.js — DOM template functions for the annotation layer.
+ *
+ * Each function returns an HTML string or a DOM element.
+ * Centralising them here makes it easy to change markup without
+ * touching any logic, and to add new annotation tool types.
+ */
+
+export const BUBBLE_SVG = '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 5.58 2 10c0 2.5 1.35 4.7 3.48 6.17-.2 1.6-1.1 3.04-2.2 4.08-.23.21-.07.58.24.58 2.3 0 4.18-1.02 5.38-2.03.7.13 1.42.2 2.1.2 5.52 0 10-3.58 10-8s-4.48-8-10-8z" fill="currentColor"/></svg>';
+
+export const TOOL_ICONS = {
+  pointer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>',
+  hand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 00-4 0"/><path d="M14 10V4a2 2 0 00-4 0v2"/><path d="M10 10.5V6a2 2 0 00-4 0v8"/><path d="M18 8a2 2 0 114 0v6a8 8 0 01-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.2 15a1.5 1.5 0 012.4-1.8L8 16"/></svg>',
+  comment: BUBBLE_SVG,
+  highlight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="6" y="10" width="12" height="4" rx="1" fill="currentColor" opacity="0.25" stroke="none"/><line x1="6" y1="12" x2="18" y2="12" stroke-width="3" opacity="0.35"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>',
+  reply: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 00-4-4H4"/></svg>',
+};
+
+export const CATEGORIES = ['Comment', 'Question', 'Issue', 'Administrative'];
+
+export const CATEGORY_COLORS = {
+  Comment:        { bg: '#dbeafe', fg: '#1e40af', bdr: '#93c5fd' },
+  Question:       { bg: '#fef3c7', fg: '#92400e', bdr: '#fcd34d' },
+  Issue:          { bg: '#fee2e2', fg: '#991b1b', bdr: '#fca5a5' },
+  Administrative: { bg: '#e5e7eb', fg: '#374151', bdr: '#9ca3af' },
+};
+
+// ─── Helpers ──────────────────────────────────────────────────
+
+export function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+export function initials(name) {
+  return (name || 'R').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+}
+
+export function formatDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    + ' at '
+    + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function catBadgeHtml(category) {
+  const c = CATEGORY_COLORS[category];
+  if (!c) return '';
+  return `<span class="ann-card-cat" style="background:${c.bg};color:${c.fg};border-color:${c.bdr}">${esc(category)}</span>`;
+}
+
+// ─── Category <select> (shared between form and filter) ─────
+
+export function categorySelectHtml(opts = {}) {
+  const { includeAll = false, selected = '' } = opts;
+  let html = '';
+  if (includeAll) {
+    html += '<option value="">All Types</option>';
+  } else {
+    html += '<option value="" disabled selected>Select type\u2026</option>';
+  }
+  CATEGORIES.forEach(cat => {
+    const sel = cat === selected ? ' selected' : '';
+    html += `<option value="${cat}"${sel}>${cat}</option>`;
+  });
+  return html;
+}
+
+// ─── Pane structure ─────────────────────────────────────────
+
+export function paneHtml() {
+  return `
+    <div class="ann-pane-header"><h3>Comments</h3></div>
+    <div class="ann-pane-toolbar">
+      <input class="ann-search-input" type="text" placeholder="Search\u2026" />
+      <select class="ann-filter-select">${categorySelectHtml({ includeAll: true })}</select>
+    </div>
+    <div class="ann-pane-list"></div>
+  `;
+}
+
+// ─── Page separator ─────────────────────────────────────────
+
+export function pageSeparator(pageNum) {
+  const el = document.createElement('div');
+  el.className = 'ann-page-sep';
+  el.textContent = 'Page ' + pageNum;
+  return el;
+}
+
+// ─── Comment card ───────────────────────────────────────────
+
+export function cardElement(ann, currentUser) {
+  const el = document.createElement('div');
+  el.className = 'ann-card';
+  el.dataset.annY = ann.y;
+
+  const author = ann.author || currentUser.name || 'Reviewer';
+  const ini = ann.authorInitials || initials(author);
+  const typeLabel = ann.type === 'highlight' ? 'Highlight' : 'Comment';
+
+  el.innerHTML = `
+    <div class="ann-card-top">
+      <div class="ann-card-avatar">${esc(ini)}</div>
+      <div class="ann-card-meta">
+        <div class="ann-card-author">${esc(author)}${catBadgeHtml(ann.category)}</div>
+        <div class="ann-card-subtitle">${esc(typeLabel)}</div>
+      </div>
+    </div>
+    <div class="ann-card-text">${esc(ann.text || '(no text)')}</div>
+    <div class="ann-card-date">${formatDate(ann.createdAt)}</div>
+    <div class="ann-card-actions">
+      <button class="ann-card-action" data-action="reply">${TOOL_ICONS.reply} Reply</button>
+      <button class="ann-card-action" data-action="edit">${TOOL_ICONS.edit} Edit</button>
+      <button class="ann-card-action" data-action="delete">${TOOL_ICONS.trash} Delete</button>
+    </div>
+  `;
+  return el;
+}
+
+// ─── Reply element ──────────────────────────────────────────
+
+export function replyElement(reply, currentUser) {
+  const author = reply.author || currentUser.name || 'Reviewer';
+  const ini = reply.authorInitials || initials(author);
+  const el = document.createElement('div');
+  el.className = 'ann-reply';
+  el.innerHTML = `
+    <div class="ann-reply-header">
+      <div class="ann-reply-avatar">${esc(ini)}</div>
+      <span class="ann-reply-author">${esc(author)}</span>
+      <span class="ann-reply-time">${formatDate(reply.createdAt)}</span>
+    </div>
+    <div class="ann-reply-text">${esc(reply.text || '')}</div>
+  `;
+  return el;
+}
+
+// ─── Reply input ────────────────────────────────────────────
+
+export function replyInputHtml() {
+  return `
+    <textarea class="ann-reply-textarea" placeholder="Write a reply\u2026" rows="1"></textarea>
+    <button class="ann-reply-send">Send</button>
+  `;
+}
+
+// ─── New-comment form ───────────────────────────────────────
+
+export function newFormElement(opts) {
+  const isHL = opts.type === 'highlight';
+  const el = document.createElement('div');
+  el.className = 'ann-new-form';
+  el.innerHTML = `
+    <div class="ann-new-form-title">${isHL ? 'New Highlight' : 'New Comment'} \u2014 Page ${opts.page}</div>
+    <select class="ann-new-form-cat">${categorySelectHtml()}</select>
+    <textarea placeholder="${isHL ? 'Add a note for this highlight\u2026' : 'Write your comment\u2026'}"></textarea>
+    <div class="ann-new-form-actions">
+      <button class="cancel">Cancel</button>
+      <button class="primary save">Save</button>
+    </div>
+  `;
+  return el;
+}
+
+// ─── Inline edit form ───────────────────────────────────────
+
+export function editFormHtml(currentText) {
+  return `
+    <textarea class="ann-edit-textarea">${esc(currentText)}</textarea>
+    <div class="ann-edit-actions">
+      <button class="ann-edit-cancel">Cancel</button>
+      <button class="ann-edit-save">Save</button>
+    </div>
+  `;
+}
+
+// ─── Floating toolbar ───────────────────────────────────────
+
+/**
+ * Build the floating toolbar.
+ * @param {Array<{id:string, icon?:string, tip?:string}>} tools
+ *   Pass {id:'sep'} for a separator. Everything else gets a button.
+ */
+export function floatingToolbar(tools) {
+  const tb = document.createElement('div');
+  tb.id = 'ann-floating-toolbar';
+  tools.forEach(t => {
+    if (t.id === 'sep') {
+      const sep = document.createElement('div');
+      sep.className = 'ann-ftool-sep';
+      tb.appendChild(sep);
+      return;
+    }
+    const btn = document.createElement('button');
+    btn.className = 'ann-ftool-btn';
+    btn.dataset.tool = t.id;
+    btn.innerHTML = `${t.icon}<span class="ann-ftool-tip">${t.tip || t.id}</span>`;
+    tb.appendChild(btn);
+  });
+  return tb;
+}
+
+</textarea>
+
+Index:
+<textarea>
+    /**
+ * index.js — ES module entry point.
+ *
+ * Usage with a bundler:
+ *   import { PDFAnnotationLayer } from './src/index.js';
+ *   const layer = await PDFAnnotationLayer.init({ documentId: 'doc-1' });
+ *
+ * Usage without a bundler (see pdfjs-annotations.js for the IIFE build):
+ *   <script src="pdfjs-annotations.js"></script>
+ *   <script>PDFAnnotationLayer.init({ documentId: 'doc-1' });</script>
+ */
+
+import AnnotationLayer from './annotation-layer.js';
+
+export { AnnotationLayer };
+export { defaultTools } from './tools.js';
+export { BUBBLE_SVG, TOOL_ICONS, CATEGORIES, CATEGORY_COLORS } from './templates.js';
+
+let _instance = null;
+
+export const PDFAnnotationLayer = {
+  async init(config = {}) {
+    if (_instance) return _instance;
+    const layer = new AnnotationLayer(config);
+    await layer.init();
+    _instance = layer;
+    return layer;
+  },
+  getInstance() { return _instance; },
+  destroy() {
+    if (_instance) { _instance.destroy(); _instance = null; }
+  },
+};
+
+export default PDFAnnotationLayer;
+
+</textarea>
