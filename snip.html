@@ -1769,7 +1769,239 @@ export default PDFAnnotationLayer;
 </code></pre>
 </div>
 
+Tools:
+<div class="code-wrapper">
+  <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  <pre><code>
 
+    /**
+ * tools.js — Modular tool registry.
+ *
+ * Each tool is a plain object with lifecycle hooks:
+ *
+ *   {
+ *     id:         'mytool',
+ *     icon:       '<svg ...>',           // for the floating toolbar
+ *     tip:        'My Tool (M)',          // tooltip text
+ *     shortcut:   'm',                    // keyboard shortcut (lowercase)
+ *     cursor:     'crosshair',            // CSS cursor when overlay is active
+ *     group:      'annotation',           // 'navigation' or 'annotation'
+ *     activate:   (ctx) => {},            // called when tool is selected
+ *     deactivate: (ctx) => {},            // called when switching away
+ *     onPageClick:     (ctx, e) => {},    // overlay click
+ *     onPageMouseDown: (ctx, e) => {},    // overlay mousedown
+ *     onPageMouseMove: (ctx, e) => {},    // overlay mousemove
+ *     onPageMouseUp:   (ctx, e) => {},    // overlay mouseup
+ *   }
+ *
+ * `ctx` is an object provided by the layer:
+ *   {
+ *     pageNumber, pageDiv, overlay,       // from the event
+ *     norm: {x, y},                       // normalised coords
+ *     layer,                              // reference to the AnnotationLayer
+ *   }
+ *
+ * To add a new tool (e.g. an arrow tool), just push another object
+ * into the tools array before calling init(). The floating toolbar
+ * and keyboard shortcuts are generated automatically.
+ */
+
+import { TOOL_ICONS, BUBBLE_SVG } from './templates.js';
+
+// ─── Built-in tools ───────────────────────────────────────────
+
+const pointerTool = {
+  id: 'pointer',
+  icon: TOOL_ICONS.pointer,
+  tip: 'Select (Esc)',
+  shortcut: 'escape',
+  group: 'navigation',
+  activate(ctx) {
+    // Tell pdfjs to use the select cursor
+    ctx.layer.dispatchCursorTool(0); // CursorTool.SELECT
+  },
+};
+
+const handTool = {
+  id: 'hand',
+  icon: TOOL_ICONS.hand,
+  tip: 'Hand Tool',
+  shortcut: null,
+  group: 'navigation',
+  activate(ctx) {
+    ctx.layer.dispatchCursorTool(1); // CursorTool.HAND
+  },
+};
+
+const commentTool = {
+  id: 'comment',
+  icon: BUBBLE_SVG,
+  tip: 'Add Comment (C)',
+  shortcut: 'c',
+  group: 'annotation',
+  overlayClass: 'mode-comment',
+
+  onPageClick(ctx, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctx.layer.openPane();
+    ctx.layer.showNewForm({
+      type: 'comment',
+      page: ctx.pageNumber,
+      x: ctx.norm.x,
+      y: ctx.norm.y,
+    });
+  },
+};
+
+const highlightTool = {
+  id: 'highlight',
+  icon: TOOL_ICONS.highlight,
+  tip: 'Highlight Region (H)',
+  shortcut: 'h',
+  group: 'annotation',
+
+  _drawing: null,
+
+  onPageMouseDown(ctx, e) {
+    e.preventDefault();
+    this._drawing = {
+      pageNumber: ctx.pageNumber,
+      pageDiv: ctx.pageDiv,
+      overlay: ctx.overlay,
+      sx: ctx.norm.x,
+      sy: ctx.norm.y,
+      cx: ctx.norm.x,
+      cy: ctx.norm.y,
+      el: null,
+    };
+    const rect = document.createElement('div');
+    rect.className = 'ann-draw-rect';
+    ctx.overlay.appendChild(rect);
+    this._drawing.el = rect;
+    this._updateRect();
+  },
+
+  onPageMouseMove(ctx) {
+    if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+    this._drawing.cx = ctx.norm.x;
+    this._drawing.cy = ctx.norm.y;
+    this._updateRect();
+  },
+
+  onPageMouseUp(ctx) {
+    if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+    const d = this._drawing;
+    if (d.el) d.el.remove();
+
+    const x = Math.min(d.sx, d.cx);
+    const y = Math.min(d.sy, d.cy);
+    const w = Math.abs(d.cx - d.sx);
+    const h = Math.abs(d.cy - d.sy);
+    this._drawing = null;
+
+    if (w < 0.01 || h < 0.01) return; // too small
+
+    ctx.layer.openPane();
+    ctx.layer.showNewForm({
+      type: 'highlight',
+      page: ctx.pageNumber,
+      x, y, width: w, height: h,
+    });
+  },
+
+  deactivate() {
+    // Clean up any in-progress drawing
+    if (this._drawing) {
+      if (this._drawing.el) this._drawing.el.remove();
+      this._drawing = null;
+    }
+  },
+
+  _updateRect() {
+    const d = this._drawing;
+    if (!d || !d.el) return;
+    const x = Math.min(d.sx, d.cx);
+    const y = Math.min(d.sy, d.cy);
+    const w = Math.abs(d.cx - d.sx);
+    const h = Math.abs(d.cy - d.sy);
+    d.el.style.left = (x * 100) + '%';
+    d.el.style.top = (y * 100) + '%';
+    d.el.style.width = (w * 100) + '%';
+    d.el.style.height = (h * 100) + '%';
+  },
+};
+
+// ─── Default tool set ─────────────────────────────────────────
+
+export function defaultTools() {
+  return [
+    pointerTool,
+    handTool,
+    { id: 'sep' }, // visual separator in the toolbar
+    commentTool,
+    highlightTool,
+  ];
+}
+
+/**
+ * Manage the active tool and dispatch overlay events to it.
+ */
+export class ToolManager {
+  constructor(tools, layer) {
+    this.tools = tools.filter(t => t.id !== 'sep'); // only real tools
+    this.allTools = tools; // includes separators for toolbar generation
+    this.layer = layer;
+    this.activeTool = null;
+    this._toolMap = new Map();
+    this.tools.forEach(t => this._toolMap.set(t.id, t));
+  }
+
+  get(id) {
+    return this._toolMap.get(id);
+  }
+
+  setActive(id) {
+    const next = this._toolMap.get(id);
+    if (!next) return;
+
+    // Deactivate previous
+    if (this.activeTool && this.activeTool !== next) {
+      if (this.activeTool.deactivate) {
+        this.activeTool.deactivate({ layer: this.layer });
+      }
+    }
+
+    this.activeTool = next;
+
+    if (next.activate) {
+      next.activate({ layer: this.layer });
+    }
+  }
+
+  /** Is the current tool an annotation tool (needs overlays active)? */
+  get isAnnotating() {
+    return this.activeTool && this.activeTool.group === 'annotation';
+  }
+
+  /** CSS class to add to active overlays */
+  get overlayClass() {
+    return this.activeTool && this.activeTool.overlayClass || '';
+  }
+
+  /** Dispatch an overlay event to the active tool */
+  dispatch(eventName, ctx, domEvent) {
+    const tool = this.activeTool;
+    if (!tool) return;
+    const handler = tool[eventName];
+    if (typeof handler === 'function') {
+      handler.call(tool, ctx, domEvent);
+    }
+  }
+}
+
+
+    </code></pre></div>
 <!-- 3. The JavaScript -->
 <script>
 function copyCode(button) {
