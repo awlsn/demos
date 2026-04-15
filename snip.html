@@ -1,5 +1,54 @@
-JS:
-<textarea>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+  .code-wrapper {
+    position: relative;
+    background: #282c34; /* Dark background */
+    border-radius: 8px;
+    margin: 20px 0;
+  }
+
+  /* Scrollable area */
+  .code-wrapper pre {
+    margin: 0;
+    padding: 1.5rem;
+    max-height: 400px; /* Limits height */
+    overflow: auto;    /* Adds scrollbars when needed */
+    color: #abb2bf;
+    font-family: 'Courier New', monospace;
+    line-height: 1.5;
+  }
+
+  /* The Copy Button */
+  .copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.2s;
+  }
+
+  .copy-btn:hover { background: rgba(255, 255, 255, 0.2); }
+  .copy-btn.success { background: #28a745; border-color: #28a745; }
+</style>
+
+
+</head>
+<body>
+    JS:
+<div class="code-wrapper">
+  <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  <pre><code>
     /**
  * annotation-layer.js — Main orchestrator.
  * Updated for pdf.js v4.1.392
@@ -972,9 +1021,12 @@ export default class AnnotationLayer {
   }
 }
 
-</textarea>
+</code></pre>
+</div>
 CSS:
-<textarea>
+<div class="code-wrapper">
+  <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  <pre><code>
     /*
  * pdfjs-annotations.css
  * Updated for pdf.js v4.1.392
@@ -1395,9 +1447,12 @@ CSS:
 
 .annotationEditorLayer { display: none !important; }
 
-</textarea>
+</code></pre>
+</div>
 storage:
-<textarea>
+<div class="code-wrapper">
+  <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  <pre><code>
     /**
  * storage.js — Pluggable persistence adapters.
  */
@@ -1454,10 +1509,13 @@ export function buildStorage(config) {
   return memoryStorage();
 }
 
-</textarea>
+</code></pre>
+</div>
 
 Templates:
-<textarea>
+<div class="code-wrapper">
+  <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  <pre><code>
     /**
  * templates.js — DOM template functions for the annotation layer.
  *
@@ -1665,10 +1723,13 @@ export function floatingToolbar(tools) {
   return tb;
 }
 
-</textarea>
+</code></pre>
+</div>
 
 Index:
-<textarea>
+<div class="code-wrapper">
+  <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  <pre><code>
     /**
  * index.js — ES module entry point.
  *
@@ -1705,4 +1766,27 @@ export const PDFAnnotationLayer = {
 
 export default PDFAnnotationLayer;
 
-</textarea>
+</code></pre>
+</div>
+
+
+<!-- 3. The JavaScript -->
+<script>
+function copyCode(button) {
+  // Finds the code text inside the same wrapper
+  const code = button.parentElement.querySelector('code').innerText;
+  
+  navigator.clipboard.writeText(code).then(() => {
+    button.textContent = "Copied!";
+    button.classList.add('success');
+    
+    // Reset button after 2 seconds
+    setTimeout(() => {
+      button.textContent = "Copy";
+      button.classList.remove('success');
+    }, 2000);
+  });
+}
+</script>
+</body>
+</html>
