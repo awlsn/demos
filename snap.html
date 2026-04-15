@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      .code-wrapper {
+        position: relative;
+        background: #282c34; /* Dark background */
+        border-radius: 8px;
+        margin: 20px 0;
+      }
+
+      /* Scrollable area */
+      .code-wrapper pre {
+        margin: 0;
+        padding: 1.5rem;
+        max-height: 400px; /* Limits height */
+        overflow: auto; /* Adds scrollbars when needed */
+        color: #abb2bf;
+        font-family: 'Courier New', monospace;
+        line-height: 1.5;
+      }
+
+      /* The Copy Button */
+      .copy-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: white;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: background 0.2s;
+      }
+
+      .copy-btn:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      .copy-btn.success {
+        background: #28a745;
+        border-color: #28a745;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+   /**
+ * realtime-storage.js — SignalR-backed storage adapter.
+ *
+ * Implements the same { load, save, remove } interface as the REST adapter,
+ * but routes writes through SignalR and listens for inbound changes from
+ * other users.
+ *
+ * Usage:
+ *   import { realtimeStorage } from './realtime-storage.js';
+ *
+ *   const rt = realtimeStorage({
+ *     hubUrl: '/hubs/annotations',
+ *     documentId: 'doc-123',
+ *     onRemoteChange: (layer) => {
+ *       // layer is bound after init — see below
+ *     },
+ *   });
+ *
+ *   // In PDFAnnotationLayer.init:
+ *   const layer = await PDFAnnotationLayer.init({
+ *     documentId: 'doc-123',
+ *     onLoad: rt.load,
+ *     onSave: rt.save,
+ *     onDelete: rt.remove,
+ *   });
+ *
+ *   // Bind the layer so inbound changes can be applied
+ *   rt.bindLayer(layer);
+ *   await rt.connect();
+ *
+ * Dependencies:
+ *   @microsoft/signalr — the SignalR JS client
+ *   Include via: <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+ *   Or:          npm install @microsoft/signalr
+ */
+
+export function realtimeStorage(config) {
+  const {
+    hubUrl = '/hubs/annotations',
+    documentId,
+    apiBaseUrl = '/api/annotations',  // REST fallback for initial load
+  } = config;
+
+  let connection = null;
+  let layer = null;
+  let connectionId = null;
+
+  // ── Build the SignalR connection ────────────────────────────
+
+  function buildConnection() {
+    // signalR is either the global (from CDN script) or the ES module import
+    const signalR = window.signalR;
+    if (!signalR) {
+      throw new Error(
+        '[realtimeStorage] SignalR client not found. '
+        + 'Include @microsoft/signalr via CDN or npm.'
+      );
+    }
+
+    return new signalR.HubConnectionBuilder()
+      .withUrl(hubUrl)
+      .withAutomaticReconnect([0, 1000, 2000, 5000, 10000, 30000]) // progressive backoff
+      .configureLogging(signalR.LogLevel.Warning)
+      .build();
+  }
+
+  // ── Inbound event handlers ─────────────────────────────────
+
+  function onAnnotationSaved(annotation, senderConnectionId) {
+    if (!layer) return;
+
+    // Ignore our own echoes
+    if (senderConnectionId === connectionId) return;
+
+    // Apply the remote change to the layer
+    layer.applyRemoteChange('upsert', annotation);
+  }
+
+  function onAnnotationDeleted(_documentId, annotationId, senderConnectionId) {
+    if (!layer) return;
+    if (senderConnectionId === connectionId) return;
+
+    layer.applyRemoteChange('delete', { id: annotationId });
+  }
+
+  function onUserJoined(connId, _docId) {
+    console.log(`[Annotations] User ${connId} joined`);
+    // Could show a presence indicator
+  }
+
+  function onUserLeft(connId, _docId) {
+    console.log(`[Annotations] User ${connId} left`);
+  }
+
+  // ── Public interface ───────────────────────────────────────
+
+  return {
+    /**
+     * Bind the annotation layer instance so remote changes can be applied.
+     * Call this after PDFAnnotationLayer.init() resolves.
+     */
+    bindLayer(layerInstance) {
+      layer = layerInstance;
+    },
+
+    /**
+     * Connect to the hub and join the document group.
+     * Call after bindLayer().
+     */
+    async connect() {
+      connection = buildConnection();
+
+      // Register inbound handlers BEFORE starting
+      connection.on('AnnotationSaved', onAnnotationSaved);
+      connection.on('AnnotationDeleted', onAnnotationDeleted);
+      connection.on('UserJoined', onUserJoined);
+      connection.on('UserLeft', onUserLeft);
+
+      // Handle reconnection — rejoin the document group
+      connection.onreconnected(async () => {
+        console.log('[Annotations] Reconnected, rejoining document');
+        connectionId = connection.connectionId;
+        try {
+          const annotations = await connection.invoke('JoinDocument', documentId);
+          // Re-sync: the server returns the full state
+          if (layer) {
+            layer.applyRemoteSync(annotations);
+          }
+        } catch (e) {
+          console.error('[Annotations] Rejoin failed:', e);
+        }
+      });
+
+      connection.onclose((err) => {
+        console.warn('[Annotations] Connection closed', err);
+      });
+
+      // Start the connection
+      await connection.start();
+      connectionId = connection.connectionId;
+      console.log(`[Annotations] Connected as ${connectionId}`);
+
+      // Join the document group — returns existing annotations
+      const annotations = await connection.invoke('JoinDocument', documentId);
+      return annotations;
+    },
+
+    /**
+     * Disconnect from the hub.
+     */
+    async disconnect() {
+      if (connection) {
+        try {
+          await connection.invoke('LeaveDocument', documentId);
+        } catch (_) {}
+        await connection.stop();
+        connection = null;
+        connectionId = null;
+      }
+    },
+
+    // ── Storage interface (same shape as restStorage) ────────
+
+    /**
+     * Load annotations. If the SignalR connection is active, use it.
+     * Otherwise fall back to REST.
+     */
+    async load() {
+      if (connection && connection.state === 'Connected') {
+        // JoinDocument already returned annotations during connect(),
+        // but this may be called again (e.g. on document switch)
+        return connection.invoke('JoinDocument', documentId);
+      }
+      // REST fallback
+      const base = apiBaseUrl.replace(/\/$/, '');
+      const r = await fetch(`${base}/${encodeURIComponent(documentId)}`);
+      if (!r.ok) throw new Error(`Load failed: ${r.status}`);
+      return r.json();
+    },
+
+    /**
+     * Save via SignalR hub. Falls back to REST if disconnected.
+     */
+    async save(annotation) {
+      // Ensure documentId is set
+      annotation.documentId = documentId;
+
+      if (connection && connection.state === 'Connected') {
+        await connection.invoke('SaveAnnotation', annotation);
+        // The hub broadcasts back to us via AnnotationSaved,
+        // but we filter our own echo. Return the annotation as-is
+        // since the local layer already has it.
+        return annotation;
+      }
+      // REST fallback
+      const base = apiBaseUrl.replace(/\/$/, '');
+      const method = annotation._persisted ? 'PUT' : 'POST';
+      const url = annotation._persisted
+        ? `${base}/${encodeURIComponent(documentId)}/${encodeURIComponent(annotation.id)}`
+        : `${base}/${encodeURIComponent(documentId)}`;
+      const r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(annotation),
+      });
+      if (!r.ok) throw new Error(`Save failed: ${r.status}`);
+      return r.json();
+    },
+
+    /**
+     * Delete via SignalR hub. Falls back to REST if disconnected.
+     */
+    async remove(annotationId) {
+      if (connection && connection.state === 'Connected') {
+        await connection.invoke('DeleteAnnotation', documentId, annotationId);
+        return;
+      }
+      // REST fallback
+      const base = apiBaseUrl.replace(/\/$/, '');
+      const r = await fetch(
+        `${base}/${encodeURIComponent(documentId)}/${encodeURIComponent(annotationId)}`,
+        { method: 'DELETE' }
+      );
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+    },
+
+    /** Get the current connection ID (useful for debugging) */
+    get currentConnectionId() { return connectionId; },
+
+    /** Get connection state */
+    get state() { return connection?.state || 'Disconnected'; },
+  };
+}
+
+</code></pre>
+    </div>
+
+    <script>
+      function copyCode(button) {
+        // Finds the code text inside the same wrapper
+        const code = button.parentElement.querySelector('code').innerText;
+
+        navigator.clipboard.writeText(code).then(() => {
+          button.textContent = 'Copied!';
+          button.classList.add('success');
+
+          // Reset button after 2 seconds
+          setTimeout(() => {
+            button.textContent = 'Copy';
+            button.classList.remove('success');
+          }, 2000);
+        });
+      }
+    </script>
+  </body>
+</html>
