@@ -228,8 +228,47 @@
     </div>
 
     <div class="section">
+      <div class="section-header" data-toggle><span>Station Transform</span><span class="toggle-collapse"></span></div>
+      <div class="section-content">
+        <div class="info">Apply scale + offset to station coordinates to align them with the PLY. Use auto-fit to guess.</div>
+        <div class="row">
+          <label>Scale</label>
+          <input type="range" id="station-scale" min="0.001" max="1000" step="0.001" value="1">
+          <input type="number" id="station-scale-n" value="1" step="0.1">
+        </div>
+        <div class="row">
+          <label>Offset X</label>
+          <input type="number" id="station-tx" value="0" step="1" style="width:100%">
+        </div>
+        <div class="row">
+          <label>Offset Y</label>
+          <input type="number" id="station-ty" value="0" step="1" style="width:100%">
+        </div>
+        <div class="row">
+          <label>Offset Z</label>
+          <input type="number" id="station-tz" value="0" step="1" style="width:100%">
+        </div>
+        <button class="btn primary" id="auto-fit">⚡ Auto-fit stations to PLY bounds</button>
+        <button class="btn" id="reset-transform">Reset transform</button>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section-header" data-toggle><span>Pano Sphere</span><span class="toggle-collapse"></span></div>
       <div class="section-content">
+        <div class="row">
+          <label>Base orientation</label>
+          <select id="base-orient">
+            <option value="none">None (raw)</option>
+            <option value="x-rot-90">Rotate sphere +90° X (Z-up scanner → Y-up sphere)</option>
+            <option value="x-rot-neg90">Rotate sphere -90° X</option>
+            <option value="z-rot-90">Rotate sphere +90° Z</option>
+            <option value="z-rot-neg90">Rotate sphere -90° Z</option>
+            <option value="x-then-y">Rot +90° X, then +90° Y</option>
+            <option value="x-then-neg-y">Rot +90° X, then -90° Y</option>
+          </select>
+        </div>
+        <div class="info">Aligns the sphere's pole with the scanner's vertical axis. Try options until the black nadir is on the floor.</div>
         <div class="row">
           <label>Radius</label>
           <input type="range" id="sphere-radius" min="0.5" max="100" step="0.5" value="20">
@@ -262,6 +301,10 @@
         <div class="row">
           <label>Flip texture V</label>
           <input type="checkbox" id="flip-v">
+        </div>
+        <div class="row">
+          <label>Apply station rotation</label>
+          <input type="checkbox" id="apply-station-rot" checked>
         </div>
         <div class="row">
           <label>Depth write</label>
@@ -298,15 +341,21 @@
         </div>
         <div class="row">
           <label>Marker size</label>
-          <input type="range" id="marker-size" min="0.05" max="2" step="0.05" value="0.3">
+          <input type="range" id="marker-size" min="0.05" max="20" step="0.05" value="0.3">
           <input type="number" id="marker-size-n" value="0.3" step="0.05">
         </div>
         <div class="row">
           <label>Show forward axis</label>
           <input type="checkbox" id="show-forward" checked>
         </div>
+        <div class="row">
+          <label>Show all spheres</label>
+          <input type="checkbox" id="show-all-spheres">
+        </div>
         <div id="station-list" class="station-list"></div>
+        <button class="btn" id="frame-stations">Frame all stations</button>
         <button class="btn" id="exit-pano">Exit pano view</button>
+        <div id="diagnostics" class="info" style="font-family: monospace; white-space: pre-wrap;"></div>
       </div>
     </div>
 
@@ -392,6 +441,11 @@ const state = {
   showMarkers: true,
   markerSize: 0.3,
   showForward: true,
+  showAllSpheres: false,
+  stationScale: 1,
+  stationOffset: new THREE.Vector3(0, 0, 0),
+  baseOrient: 'none',
+  applyStationRot: true,
 };
 
 // --- coordinate system handling ---
@@ -449,6 +503,7 @@ document.getElementById('ply-file').addEventListener('change', async (e) => {
 
     label.textContent = `✓ ${file.name} (${(geom.attributes.position.count / 1000).toFixed(0)}k pts)`;
     label.classList.add('loaded');
+    updateDiagnostics();
   } catch (err) {
     label.textContent = `✗ Failed: ${err.message}`;
     console.error(err);
@@ -485,6 +540,7 @@ document.getElementById('json-file').addEventListener('change', async (e) => {
     }
 
     rebuildStationList();
+    updateDiagnostics();
     label.textContent = `✓ ${file.name} (${state.stations.length} stations)`;
     label.classList.add('loaded');
   } catch (err) {
@@ -492,6 +548,63 @@ document.getElementById('json-file').addEventListener('change', async (e) => {
     console.error(err);
   }
 });
+
+function updateDiagnostics() {
+  const diag = document.getElementById('diagnostics');
+  if (!state.stations.length && !state.pointCloud) {
+    diag.textContent = '';
+    return;
+  }
+  let txt = '';
+
+  if (state.pointCloud) {
+    const box = state.pointCloud.geometry.boundingBox;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const c = new THREE.Vector3();
+    box.getCenter(c);
+    txt += `PLY bounds (raw):\n`;
+    txt += `  min (${box.min.x.toFixed(2)}, ${box.min.y.toFixed(2)}, ${box.min.z.toFixed(2)})\n`;
+    txt += `  max (${box.max.x.toFixed(2)}, ${box.max.y.toFixed(2)}, ${box.max.z.toFixed(2)})\n`;
+    txt += `  size ${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)}\n`;
+    txt += `  ctr (${c.x.toFixed(2)}, ${c.y.toFixed(2)}, ${c.z.toFixed(2)})\n\n`;
+  }
+
+  if (state.stations.length) {
+    const xs = state.stations.map(s => s.position.x);
+    const ys = state.stations.map(s => s.position.y);
+    const zs = state.stations.map(s => s.position.z);
+    const min = [Math.min(...xs), Math.min(...ys), Math.min(...zs)];
+    const max = [Math.max(...xs), Math.max(...ys), Math.max(...zs)];
+    txt += `Stations bounds (raw):\n`;
+    txt += `  min (${min[0].toFixed(2)}, ${min[1].toFixed(2)}, ${min[2].toFixed(2)})\n`;
+    txt += `  max (${max[0].toFixed(2)}, ${max[1].toFixed(2)}, ${max[2].toFixed(2)})\n`;
+    txt += `  count: ${state.stations.length}\n`;
+    txt += `\nFirst 3 stations:\n`;
+    for (const s of state.stations.slice(0, 3)) {
+      txt += `  ${s.id}: (${s.position.x.toFixed(2)}, ${s.position.y.toFixed(2)}, ${s.position.z.toFixed(2)})\n`;
+    }
+  }
+
+  diag.textContent = txt;
+}
+
+function getTransformedPosition(rawPos) {
+  return rawPos.clone().multiplyScalar(state.stationScale).add(state.stationOffset);
+}
+
+function applyStationTransform() {
+  // update marker, forward-line, and sphere positions for all stations
+  for (const station of state.stations) {
+    const p = getTransformedPosition(station.position);
+    const marker = state.markers.get(station.id);
+    if (marker) marker.position.copy(p);
+    const line = state.forwardLines.get(station.id);
+    if (line) line.position.copy(p);
+    const sphere = state.spheres.get(station.id);
+    if (sphere) sphere.position.copy(p);
+  }
+}
 
 function buildQuaternion(raw) {
   if (state.quatOrder === 'wxyz') {
@@ -508,11 +621,12 @@ function buildQuaternion(raw) {
 }
 
 function addStationMarker(id, pos, q) {
+  const transformed = getTransformedPosition(pos);
   // marker sphere
   const markerGeom = new THREE.SphereGeometry(state.markerSize, 16, 12);
   const markerMat = new THREE.MeshBasicMaterial({ color: 0xff7b29 });
   const marker = new THREE.Mesh(markerGeom, markerMat);
-  marker.position.copy(pos);
+  marker.position.copy(transformed);
   marker.userData.stationId = id;
   marker.visible = state.showMarkers;
   coordRoot.add(marker);
@@ -535,7 +649,7 @@ function addStationMarker(id, pos, q) {
   lineGeom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   const lineMat = new THREE.LineBasicMaterial({ vertexColors: true });
   const line = new THREE.LineSegments(lineGeom, lineMat);
-  line.position.copy(pos);
+  line.position.copy(transformed);
   line.quaternion.copy(q);
   line.visible = state.showForward;
   coordRoot.add(line);
@@ -550,13 +664,22 @@ document.getElementById('pano-files').addEventListener('change', async (e) => {
   label.textContent = `↻ Loading ${files.length} panos…`;
 
   let loaded = 0;
+  const unmatched = [];
   for (const file of files) {
-    // match by id substring in filename
+    // match by id - prefer exact match, then "ends with id" (e.g. station_10.jpg), then includes
     const baseName = file.name.replace(/\.[^.]+$/, '');
-    const station = state.stations.find(s =>
-      baseName === s.id || baseName.includes(s.id) || s.id.includes(baseName)
-    );
-    if (!station) continue;
+    let station = state.stations.find(s => baseName === s.id);
+    if (!station) {
+      // try matching where the id is a clean suffix or prefix (separated by non-alphanumeric)
+      station = state.stations.find(s => {
+        const re = new RegExp(`(^|[^0-9a-zA-Z])${s.id}([^0-9a-zA-Z]|$)`);
+        return re.test(baseName);
+      });
+    }
+    if (!station) {
+      unmatched.push(file.name);
+      continue;
+    }
 
     const url = URL.createObjectURL(file);
     const tex = await new Promise((resolve, reject) => {
@@ -569,12 +692,43 @@ document.getElementById('pano-files').addEventListener('change', async (e) => {
     loaded++;
   }
 
-  label.textContent = `✓ ${loaded}/${files.length} panos matched to stations`;
+  label.textContent = `✓ ${loaded}/${files.length} matched` + (unmatched.length ? ` (no match: ${unmatched.slice(0,3).join(', ')}${unmatched.length > 3 ? '…' : ''})` : '');
   label.classList.add('loaded');
   rebuildStationList();
 });
 
 // --- pano sphere management ---
+function getBaseOrientationQuaternion() {
+  const q = new THREE.Quaternion();
+  switch (state.baseOrient) {
+    case 'x-rot-90':
+      q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      break;
+    case 'x-rot-neg90':
+      q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      break;
+    case 'z-rot-90':
+      q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      break;
+    case 'z-rot-neg90':
+      q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2);
+      break;
+    case 'x-then-y': {
+      const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+      q.multiplyQuaternions(qy, qx);
+      break;
+    }
+    case 'x-then-neg-y': {
+      const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+      q.multiplyQuaternions(qy, qx);
+      break;
+    }
+  }
+  return q;
+}
+
 function buildSphereForStation(stationId) {
   const station = state.stations.find(s => s.id === stationId);
   const tex = state.panoTextures.get(stationId);
@@ -606,23 +760,32 @@ function buildSphereForStation(stationId) {
     depthWrite: state.depthWrite,
   });
   const sphere = new THREE.Mesh(geom, mat);
-  sphere.position.copy(station.position);
+  sphere.position.copy(getTransformedPosition(station.position));
 
-  // station's own orientation
-  const stationQ = station.quaternion.clone();
-
-  // user-tunable offsets (applied AFTER station orientation, in station-local space)
+  // Composition order (applied right-to-left to a vector):
+  //   final = stationQ * offsetQ * baseQ
+  // baseQ:    rotates the sphere's geometry frame so its pole aligns with scanner-down
+  // offsetQ:  user-tunable seam/pitch/roll fine-tune (in scanner-local frame)
+  // stationQ: scanner's recorded orientation in world space
+  const baseQ = getBaseOrientationQuaternion();
   const offsetEuler = new THREE.Euler(
     THREE.MathUtils.degToRad(state.pitchOffset),
-    THREE.MathUtils.degToRad(state.seamOffset),  // yaw — rotates seam around vertical
+    THREE.MathUtils.degToRad(state.seamOffset),
     THREE.MathUtils.degToRad(state.rollOffset),
     'YXZ'
   );
   const offsetQ = new THREE.Quaternion().setFromEuler(offsetEuler);
 
-  sphere.quaternion.copy(stationQ).multiply(offsetQ);
+  const finalQ = new THREE.Quaternion();
+  if (state.applyStationRot) {
+    finalQ.copy(station.quaternion).multiply(offsetQ).multiply(baseQ);
+  } else {
+    finalQ.multiplyQuaternions(offsetQ, baseQ);
+  }
+  sphere.quaternion.copy(finalQ);
+
   sphere.userData.stationId = stationId;
-  sphere.renderOrder = -1; // render before points
+  sphere.renderOrder = -1;
 
   coordRoot.add(sphere);
   state.spheres.set(stationId, sphere);
@@ -641,7 +804,17 @@ function rebuildAllSpheres() {
 function setActiveStation(stationId) {
   state.activeStation = stationId;
   for (const [id, sphere] of state.spheres) {
-    sphere.visible = (id === stationId);
+    if (state.showAllSpheres) {
+      sphere.visible = true;
+      sphere.material.transparent = true;
+      sphere.material.opacity = 0.25;
+      sphere.material.needsUpdate = true;
+    } else {
+      sphere.visible = (id === stationId);
+      sphere.material.transparent = state.sphereOpacity < 1;
+      sphere.material.opacity = state.sphereOpacity;
+      sphere.material.needsUpdate = true;
+    }
   }
   // update station list highlight
   document.querySelectorAll('.station-item').forEach(el => {
@@ -651,11 +824,12 @@ function setActiveStation(stationId) {
   if (stationId) {
     const station = state.stations.find(s => s.id === stationId);
     if (station) {
-      const worldPos = station.position.clone().applyMatrix4(coordRoot.matrixWorld);
+      const transformedPos = getTransformedPosition(station.position);
+      const worldPos = transformedPos.clone().applyMatrix4(coordRoot.matrixWorld);
       camera.position.copy(worldPos);
       // look down station's local +Y (forward) by default
       const fwd = new THREE.Vector3(0, 1, 0).applyQuaternion(station.quaternion);
-      const localTarget = station.position.clone().add(fwd);
+      const localTarget = transformedPos.clone().add(fwd);
       const worldTarget = localTarget.applyMatrix4(coordRoot.matrixWorld);
       controls.target.copy(worldTarget);
       controls.update();
@@ -692,6 +866,38 @@ function rebuildStationList() {
 }
 
 document.getElementById('exit-pano').addEventListener('click', () => setActiveStation(null));
+
+document.getElementById('show-all-spheres').addEventListener('change', (e) => {
+  state.showAllSpheres = e.target.checked;
+  // make sure all spheres exist for visible stations with panos
+  if (state.showAllSpheres) {
+    for (const station of state.stations) {
+      if (state.panoTextures.has(station.id) && !state.spheres.has(station.id)) {
+        buildSphereForStation(station.id);
+      }
+    }
+  }
+  setActiveStation(state.activeStation);
+});
+
+document.getElementById('frame-stations').addEventListener('click', () => {
+  if (!state.stations.length) return;
+  const xs = state.stations.map(s => s.position.x);
+  const ys = state.stations.map(s => s.position.y);
+  const zs = state.stations.map(s => s.position.z);
+  const min = new THREE.Vector3(Math.min(...xs), Math.min(...ys), Math.min(...zs));
+  const max = new THREE.Vector3(Math.max(...xs), Math.max(...ys), Math.max(...zs));
+  const center = min.clone().add(max).multiplyScalar(0.5);
+  const size = max.clone().sub(min);
+  const dist = Math.max(size.x, size.y, size.z, 5) * 1.5;
+
+  // transform through coordRoot
+  const worldCenter = center.clone().applyMatrix4(coordRoot.matrixWorld);
+  camera.position.copy(worldCenter).add(new THREE.Vector3(dist, dist, dist));
+  controls.target.copy(worldCenter);
+  controls.update();
+  setActiveStation(null);
+});
 
 // --- click-to-enter on markers ---
 const raycaster = new THREE.Raycaster();
@@ -751,6 +957,12 @@ bindSlider('marker-size', 'markerSize', () => {
 bindCheckbox('flip-u', 'flipU', rebuildAllSpheres);
 bindCheckbox('flip-v', 'flipV', rebuildAllSpheres);
 bindCheckbox('depth-write', 'depthWrite', rebuildAllSpheres);
+bindCheckbox('apply-station-rot', 'applyStationRot', rebuildAllSpheres);
+
+document.getElementById('base-orient').addEventListener('change', (e) => {
+  state.baseOrient = e.target.value;
+  rebuildAllSpheres();
+});
 bindCheckbox('show-points', 'showPoints', () => {
   if (state.pointCloud) state.pointCloud.visible = state.showPoints;
 });
@@ -770,6 +982,76 @@ bindCheckbox('show-forward', 'showForward', () => {
 document.getElementById('up-axis').addEventListener('change', (e) => {
   state.upAxis = e.target.value;
   applyUpAxis();
+});
+
+// --- station transform wiring ---
+function bindTransformInput(id, getter, setter) {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    setter(parseFloat(el.value) || 0);
+    applyStationTransform();
+  });
+}
+
+const scaleSlider = document.getElementById('station-scale');
+const scaleNumber = document.getElementById('station-scale-n');
+function setStationScale(v) {
+  state.stationScale = v;
+  scaleSlider.value = v;
+  scaleNumber.value = v;
+  applyStationTransform();
+}
+scaleSlider.addEventListener('input', () => setStationScale(parseFloat(scaleSlider.value)));
+scaleNumber.addEventListener('input', () => setStationScale(parseFloat(scaleNumber.value)));
+
+bindTransformInput('station-tx', () => state.stationOffset.x, (v) => state.stationOffset.x = v);
+bindTransformInput('station-ty', () => state.stationOffset.y, (v) => state.stationOffset.y = v);
+bindTransformInput('station-tz', () => state.stationOffset.z, (v) => state.stationOffset.z = v);
+
+document.getElementById('reset-transform').addEventListener('click', () => {
+  setStationScale(1);
+  state.stationOffset.set(0, 0, 0);
+  document.getElementById('station-tx').value = 0;
+  document.getElementById('station-ty').value = 0;
+  document.getElementById('station-tz').value = 0;
+  applyStationTransform();
+});
+
+document.getElementById('auto-fit').addEventListener('click', () => {
+  if (!state.stations.length || !state.pointCloud) {
+    alert('Need both PLY and stations loaded to auto-fit.');
+    return;
+  }
+  // compute station bounds (raw)
+  const xs = state.stations.map(s => s.position.x);
+  const ys = state.stations.map(s => s.position.y);
+  const zs = state.stations.map(s => s.position.z);
+  const sMin = new THREE.Vector3(Math.min(...xs), Math.min(...ys), Math.min(...zs));
+  const sMax = new THREE.Vector3(Math.max(...xs), Math.max(...ys), Math.max(...zs));
+  const sCenter = sMin.clone().add(sMax).multiplyScalar(0.5);
+  const sSize = sMax.clone().sub(sMin);
+
+  // PLY bounds (raw, before any transform)
+  const pBox = state.pointCloud.geometry.boundingBox;
+  const pCenter = new THREE.Vector3();
+  pBox.getCenter(pCenter);
+  const pSize = new THREE.Vector3();
+  pBox.getSize(pSize);
+
+  // estimate scale: ratio of largest extents (avoid near-zero axes)
+  const sExtent = Math.max(sSize.x, sSize.y, sSize.z, 0.01);
+  const pExtent = Math.max(pSize.x, pSize.y, pSize.z, 0.01);
+  const scale = pExtent / sExtent;
+
+  // offset: align centers after scaling
+  const offset = pCenter.clone().sub(sCenter.clone().multiplyScalar(scale));
+
+  setStationScale(scale);
+  state.stationOffset.copy(offset);
+  document.getElementById('station-tx').value = offset.x.toFixed(2);
+  document.getElementById('station-ty').value = offset.y.toFixed(2);
+  document.getElementById('station-tz').value = offset.z.toFixed(2);
+  applyStationTransform();
 });
 document.getElementById('quat-order').addEventListener('change', (e) => {
   state.quatOrder = e.target.value;
@@ -792,7 +1074,11 @@ document.getElementById('copy-settings').addEventListener('click', () => {
   const settings = {
     upAxis: state.upAxis,
     quatOrder: state.quatOrder,
+    stationScale: state.stationScale,
+    stationOffset: { x: state.stationOffset.x, y: state.stationOffset.y, z: state.stationOffset.z },
     sphereRadius: state.sphereRadius,
+    baseOrient: state.baseOrient,
+    applyStationRot: state.applyStationRot,
     seamOffsetDeg: state.seamOffset,
     pitchOffsetDeg: state.pitchOffset,
     rollOffsetDeg: state.rollOffset,
