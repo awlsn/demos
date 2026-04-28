@@ -520,10 +520,6 @@
         <input type="checkbox" id="show-markers" checked>
       </div>
       <div class="field">
-        <label>Show forward axis</label>
-        <input type="checkbox" id="show-forward" checked>
-      </div>
-      <div class="field">
         <label>Show grid</label>
         <input type="checkbox" id="show-grid" checked>
       </div>
@@ -555,6 +551,35 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 
 /* ============================================================
+   PROJECT CONFIG — edit these to preconfigure a viewer page
+   ============================================================
+   Set any of these to a URL string to auto-load on page open.
+   Set to null to require manual file selection.
+
+   Pano matching modes:
+     'id'        — match filename to station.id (e.g. "5.jpg" → id "5")
+     'sequence'  — match by file order to station order in JSON
+                   (1st pano file → 1st station, 2nd → 2nd, …)
+     'id-shift'  — match filename N to station with id (N + PANO_ID_SHIFT)
+                   Use when filenames are 1-indexed but station ids are 0-indexed:
+                   PANO_ID_SHIFT = -1 means "1.jpg" → station id "0"
+*/
+const CONFIG = {
+  PLY_URL:        null,         // e.g. './scans/site-a.ply'
+  STATIONS_URL:   null,         // e.g. './scans/site-a-stations.json'
+  PANO_FOLDER:    null,         // e.g. './scans/site-a/panos/'  — preferred if all panos live together
+  PANO_EXT:       'jpg',        // file extension used when building URLs from PANO_FOLDER
+  PANO_URLS:      null,         // explicit list, used if PANO_FOLDER is not set
+  PROJECT_NAME:   null,         // shown in topbar if set
+
+  PANO_MATCH_MODE: 'sequence',  // 'id' | 'sequence' | 'id-shift'
+  PANO_ID_SHIFT:   -1,          // used when PANO_MATCH_MODE === 'id-shift'
+
+  UNIT_MODE:       'auto',      // 'auto' | 'm' | 'ft' | 'in' | 'mm'
+  UP_AXIS:         'z',         // 'z' | 'y'
+};
+
+/* ============================================================
    STATE
    ============================================================ */
 const state = {
@@ -563,12 +588,11 @@ const state = {
   panoTextures: new Map(), // id -> THREE.Texture
   activeStationId: null,
   unitScale: 1,            // multiplier to convert PLY into meters
-  unitMode: 'auto',
+  unitMode: CONFIG.UNIT_MODE,
   detectedUnit: null,
-  upAxis: 'z',
+  upAxis: CONFIG.UP_AXIS,
   pointSize: 1.5,
   showMarkers: true,
-  showForward: true,
   showGrid: true,
   bgColor: 'dark',
   panoFov: 75,
@@ -602,21 +626,14 @@ cloudScene.add(coordRoot);
 let gridHelper = new THREE.GridHelper(20, 20, 0x2a2a30, 0x1a1a1e);
 cloudScene.add(gridHelper);
 
-// Markers / forward lines / cloud all live in coordRoot
+// Markers / cloud all live in coordRoot
 const markerGroup = new THREE.Group();
-const forwardGroup = new THREE.Group();
 coordRoot.add(markerGroup);
-coordRoot.add(forwardGroup);
 
 const markerMeshes = new Map();   // id -> Mesh
-const forwardLines = new Map();   // id -> LineSegments
 
-// Highlight ring around active marker
-const ringGeom = new THREE.RingGeometry(0.6, 0.7, 32);
-const ringMat = new THREE.MeshBasicMaterial({ color: 0xff7b29, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
-const activeRing = new THREE.Mesh(ringGeom, ringMat);
-activeRing.visible = false;
-coordRoot.add(activeRing);
+const MARKER_COLOR_IDLE = 0xff7b29;
+const MARKER_COLOR_ACTIVE = 0xffffff;
 
 function applyUpAxis() {
   if (state.upAxis === 'z') {
@@ -712,108 +729,138 @@ function setLoadStatus(btnId, text, loaded = false) {
 }
 
 // --- PLY ---
+async function loadPLYFromBuffer(buffer, displayName) {
+  const geom = new PLYLoader().parse(buffer);
+  geom.computeBoundingBox();
+
+  if (state.pointCloud) {
+    coordRoot.remove(state.pointCloud);
+    state.pointCloud.geometry.dispose();
+    state.pointCloud.material.dispose();
+  }
+
+  const hasColor = geom.hasAttribute('color');
+  const material = new THREE.PointsMaterial({
+    size: state.pointSize,
+    vertexColors: hasColor,
+    color: hasColor ? 0xffffff : 0xcccccc,
+    sizeAttenuation: false,
+  });
+  state.pointCloud = new THREE.Points(geom, material);
+  coordRoot.add(state.pointCloud);
+
+  detectAndApplyUnits();
+  rebuildSceneScale();
+  frameAll();
+
+  document.getElementById('cloud-empty').style.display = 'none';
+  setLoadStatus('ply-btn', displayName, true);
+  updateTopbarHint();
+}
+
+async function loadStationsFromText(text, displayName) {
+  const data = JSON.parse(text);
+  const arr = Array.isArray(data) ? data : (data.stations || data.locations || []);
+  if (!arr.length) throw new Error('no stations in file');
+
+  // clear existing
+  for (const m of markerMeshes.values()) markerGroup.remove(m);
+  markerMeshes.clear();
+  state.stations = [];
+
+  for (const raw of arr) {
+    const id = String(raw.id);
+    const position = new THREE.Vector3(raw.x, raw.y, raw.z);
+    const quaternion = new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw).normalize();
+    state.stations.push({ id, position, quaternion, raw });
+  }
+
+  detectAndApplyUnits();
+  rebuildMarkers();
+  rebuildSceneScale();
+  rebuildStationList();
+  frameAll();
+  setLoadStatus('json-btn', `${state.stations.length} stations`, true);
+  updateTopbarHint();
+}
+
 document.getElementById('ply-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   setLoadStatus('ply-btn', 'loading…');
   try {
     const buffer = await file.arrayBuffer();
-    const geom = new PLYLoader().parse(buffer);
-    geom.computeBoundingBox();
-
-    if (state.pointCloud) {
-      coordRoot.remove(state.pointCloud);
-      state.pointCloud.geometry.dispose();
-      state.pointCloud.material.dispose();
-    }
-
-    const hasColor = geom.hasAttribute('color');
-    const material = new THREE.PointsMaterial({
-      size: state.pointSize,
-      vertexColors: hasColor,
-      color: hasColor ? 0xffffff : 0xcccccc,
-      sizeAttenuation: false, // screen-space points feel better for navigation
-    });
-    state.pointCloud = new THREE.Points(geom, material);
-    coordRoot.add(state.pointCloud);
-
-    detectAndApplyUnits();
-    rebuildSceneScale();
-    frameAll();
-
-    document.getElementById('cloud-empty').style.display = 'none';
-    setLoadStatus('ply-btn', `${file.name}`, true);
-    updateTopbarHint();
+    await loadPLYFromBuffer(buffer, file.name);
   } catch (err) {
     console.error(err);
     setLoadStatus('ply-btn', 'error');
   }
 });
 
-// --- Stations JSON ---
 document.getElementById('json-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   setLoadStatus('json-btn', 'loading…');
   try {
     const text = await file.text();
-    const data = JSON.parse(text);
-    const arr = Array.isArray(data) ? data : (data.stations || data.locations || []);
-    if (!arr.length) throw new Error('no stations in file');
-
-    // clear existing
-    for (const m of markerMeshes.values()) markerGroup.remove(m);
-    for (const l of forwardLines.values()) forwardGroup.remove(l);
-    markerMeshes.clear();
-    forwardLines.clear();
-    state.stations = [];
-
-    for (const raw of arr) {
-      const id = String(raw.id);
-      const position = new THREE.Vector3(raw.x, raw.y, raw.z);
-      const quaternion = new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw).normalize();
-      state.stations.push({ id, position, quaternion, raw });
-    }
-
-    detectAndApplyUnits(); // re-detect now that we have stations to compare
-    rebuildMarkers();
-    rebuildSceneScale();
-    rebuildStationList();
-    frameAll();
-    setLoadStatus('json-btn', `${state.stations.length} stations`, true);
-    updateTopbarHint();
+    await loadStationsFromText(text, file.name);
   } catch (err) {
     console.error(err);
     setLoadStatus('json-btn', err.message);
   }
 });
 
-// --- Panos ---
+function matchPanoNameToStation(baseName, fileIndex) {
+  if (CONFIG.PANO_MATCH_MODE === 'sequence') {
+    return state.stations[fileIndex] || null;
+  }
+
+  if (CONFIG.PANO_MATCH_MODE === 'id-shift') {
+    const match = baseName.match(/(\d+)/);
+    if (!match) return null;
+    const fileNum = parseInt(match[1], 10);
+    const targetId = String(fileNum + CONFIG.PANO_ID_SHIFT);
+    return state.stations.find(s => s.id === targetId) || null;
+  }
+
+  // 'id' mode
+  let station = state.stations.find(s => baseName === s.id);
+  if (!station) {
+    station = state.stations.find(s => {
+      const re = new RegExp(`(^|[^0-9a-zA-Z])${s.id}([^0-9a-zA-Z]|$)`);
+      return re.test(baseName);
+    });
+  }
+  return station || null;
+}
+
+function basenameFromUrl(url) {
+  const path = url.split('?')[0].split('#')[0];
+  const file = path.split('/').pop();
+  return file.replace(/\.[^.]+$/, '');
+}
+
 document.getElementById('pano-input').addEventListener('change', async (e) => {
   const files = Array.from(e.target.files);
   if (!files.length) return;
   setLoadStatus('pano-btn', `loading ${files.length}…`);
 
+  // Sort sequentially-named files naturally for sequence mode
+  files.sort((a, b) => {
+    const na = parseInt((a.name.match(/(\d+)/) || ['0'])[0], 10);
+    const nb = parseInt((b.name.match(/(\d+)/) || ['0'])[0], 10);
+    return na - nb;
+  });
+
   let matched = 0;
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     const baseName = file.name.replace(/\.[^.]+$/, '');
-    // exact match first, then word-boundary match
-    let station = state.stations.find(s => baseName === s.id);
-    if (!station) {
-      station = state.stations.find(s => {
-        const re = new RegExp(`(^|[^0-9a-zA-Z])${s.id}([^0-9a-zA-Z]|$)`);
-        return re.test(baseName);
-      });
-    }
+    const station = matchPanoNameToStation(baseName, i);
     if (!station) continue;
 
     const url = URL.createObjectURL(file);
-    const tex = await new Promise((resolve, reject) => {
-      new THREE.TextureLoader().load(url, resolve, undefined, reject);
-    });
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.minFilter = THREE.LinearFilter;
-    tex.magFilter = THREE.LinearFilter;
+    const tex = await loadTexture(url);
     state.panoTextures.set(station.id, tex);
     matched++;
   }
@@ -822,6 +869,17 @@ document.getElementById('pano-input').addEventListener('change', async (e) => {
   setLoadStatus('pano-btn', `${matched}/${files.length} matched`, matched > 0);
   updateTopbarHint();
 });
+
+function loadTexture(url) {
+  return new Promise((resolve, reject) => {
+    new THREE.TextureLoader().load(url, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      resolve(tex);
+    }, undefined, reject);
+  });
+}
 
 /* ============================================================
    UNIT DETECTION
@@ -940,51 +998,33 @@ function getSceneDiagonal() {
 
 function rebuildMarkers() {
   // clear
-  for (const m of markerMeshes.values()) markerGroup.remove(m);
-  for (const l of forwardLines.values()) forwardGroup.remove(l);
+  for (const m of markerMeshes.values()) {
+    markerGroup.remove(m);
+    m.material.dispose();
+  }
   markerMeshes.clear();
-  forwardLines.clear();
 
   if (!state.stations.length) return;
 
   const diag = getSceneDiagonal();
   const markerRadius = Math.max(0.05, diag * 0.005);  // 0.5% of scene diagonal
-  const axisLen = markerRadius * 5;
 
   const geomSphere = new THREE.SphereGeometry(markerRadius, 16, 12);
-  const matMarker = new THREE.MeshBasicMaterial({ color: 0xff7b29 });
 
   for (const station of state.stations) {
-    const marker = new THREE.Mesh(geomSphere, matMarker);
+    // Each marker gets its own material so color can change individually
+    const isActive = station.id === state.activeStationId;
+    const mat = new THREE.MeshBasicMaterial({
+      color: isActive ? MARKER_COLOR_ACTIVE : MARKER_COLOR_IDLE,
+    });
+    const marker = new THREE.Mesh(geomSphere, mat);
     marker.position.copy(station.position);
     marker.userData.stationId = station.id;
     marker.visible = state.showMarkers;
+    if (isActive) marker.scale.setScalar(1.4);
     markerGroup.add(marker);
     markerMeshes.set(station.id, marker);
-
-    const lineGeom = new THREE.BufferGeometry();
-    const pts = [
-      0,0,0, axisLen,0,0,
-      0,0,0, 0,axisLen,0,
-      0,0,0, 0,0,axisLen,
-    ];
-    lineGeom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    const colors = [
-      1,0.3,0.3, 1,0.3,0.3,
-      0.3,1,0.3, 0.3,1,0.3,
-      0.3,0.5,1, 0.3,0.5,1,
-    ];
-    lineGeom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    const line = new THREE.LineSegments(lineGeom, new THREE.LineBasicMaterial({ vertexColors: true }));
-    line.position.copy(station.position);
-    line.quaternion.copy(station.quaternion);
-    line.visible = state.showForward;
-    forwardGroup.add(line);
-    forwardLines.set(station.id, line);
   }
-
-  // Active ring: scale to be slightly larger than markers
-  activeRing.scale.setScalar(markerRadius * 2);
 
   // Resize grid to match scene
   cloudScene.remove(gridHelper);
@@ -1040,14 +1080,11 @@ function setActiveStation(stationId) {
     el.classList.toggle('active', el.querySelector('.name')?.textContent === `Station ${stationId}`);
   });
 
-  // Update active ring in cloud view
-  if (station) {
-    activeRing.position.copy(station.position);
-    // Orient ring to face camera-ish (always horizontal in scene-up)
-    activeRing.rotation.set(-Math.PI / 2, 0, 0);
-    activeRing.visible = true;
-  } else {
-    activeRing.visible = false;
+  // Update marker colors and scales
+  for (const [id, marker] of markerMeshes) {
+    const isActive = id === stationId;
+    marker.material.color.setHex(isActive ? MARKER_COLOR_ACTIVE : MARKER_COLOR_IDLE);
+    marker.scale.setScalar(isActive ? 1.4 : 1);
   }
 
   // Update pano viewport
@@ -1208,10 +1245,6 @@ document.getElementById('show-markers').addEventListener('change', (e) => {
   state.showMarkers = e.target.checked;
   for (const m of markerMeshes.values()) m.visible = state.showMarkers;
 });
-document.getElementById('show-forward').addEventListener('change', (e) => {
-  state.showForward = e.target.checked;
-  for (const l of forwardLines.values()) l.visible = state.showForward;
-});
 document.getElementById('show-grid').addEventListener('change', (e) => {
   state.showGrid = e.target.checked;
   gridHelper.visible = state.showGrid;
@@ -1267,6 +1300,102 @@ function animate() {
 
 resizeRenderers();
 animate();
+
+/* ============================================================
+   AUTO-LOAD FROM CONFIG
+   ============================================================ */
+async function autoLoadFromConfig() {
+  // project name in topbar
+  if (CONFIG.PROJECT_NAME) {
+    document.querySelector('.title').innerHTML = `Scan Viewer <span style="color:var(--text-faint);font-weight:400;margin-left:8px;">·</span> <span style="color:var(--text-dim);font-weight:500;margin-left:8px;">${CONFIG.PROJECT_NAME}</span>`;
+  }
+
+  // Load PLY and stations in parallel; both complete before panos
+  const tasks = [];
+
+  if (CONFIG.PLY_URL) {
+    setLoadStatus('ply-btn', 'fetching…');
+    tasks.push((async () => {
+      try {
+        const resp = await fetch(CONFIG.PLY_URL);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buffer = await resp.arrayBuffer();
+        const name = CONFIG.PLY_URL.split('/').pop();
+        await loadPLYFromBuffer(buffer, name);
+      } catch (err) {
+        console.error('PLY auto-load failed:', err);
+        setLoadStatus('ply-btn', `failed: ${err.message}`);
+      }
+    })());
+  }
+
+  if (CONFIG.STATIONS_URL) {
+    setLoadStatus('json-btn', 'fetching…');
+    tasks.push((async () => {
+      try {
+        const resp = await fetch(CONFIG.STATIONS_URL);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        const name = CONFIG.STATIONS_URL.split('/').pop();
+        await loadStationsFromText(text, name);
+      } catch (err) {
+        console.error('Stations auto-load failed:', err);
+        setLoadStatus('json-btn', `failed: ${err.message}`);
+      }
+    })());
+  }
+
+  await Promise.all(tasks);
+
+  // Panos depend on stations being loaded first
+  let panoUrls = CONFIG.PANO_URLS;
+
+  // If a folder is configured, derive URLs from station list according to match mode
+  if (CONFIG.PANO_FOLDER && state.stations.length) {
+    const folder = CONFIG.PANO_FOLDER.endsWith('/') ? CONFIG.PANO_FOLDER : CONFIG.PANO_FOLDER + '/';
+    const ext = CONFIG.PANO_EXT.replace(/^\./, '');
+    panoUrls = state.stations.map((station, i) => {
+      let num;
+      if (CONFIG.PANO_MATCH_MODE === 'sequence') {
+        num = i + 1;                                  // 1-indexed by position
+      } else if (CONFIG.PANO_MATCH_MODE === 'id-shift') {
+        num = parseInt(station.id, 10) - CONFIG.PANO_ID_SHIFT;
+      } else {
+        num = station.id;                              // 'id' — filename matches id literally
+      }
+      return `${folder}${num}.${ext}`;
+    });
+  }
+
+  if (panoUrls && panoUrls.length && state.stations.length) {
+    setLoadStatus('pano-btn', `fetching ${panoUrls.length}…`);
+    let matched = 0;
+    let failed = 0;
+    for (let i = 0; i < panoUrls.length; i++) {
+      const url = panoUrls[i];
+      const baseName = basenameFromUrl(url);
+      const station = matchPanoNameToStation(baseName, i);
+      if (!station) {
+        console.warn(`No station match for pano: ${url}`);
+        continue;
+      }
+      try {
+        const tex = await loadTexture(url);
+        state.panoTextures.set(station.id, tex);
+        matched++;
+      } catch (err) {
+        failed++;
+        console.warn(`Pano load failed: ${url}`, err);
+      }
+    }
+    rebuildStationList();
+    const failNote = failed > 0 ? ` (${failed} failed)` : '';
+    setLoadStatus('pano-btn', `${matched}/${panoUrls.length} loaded${failNote}`, matched > 0);
+    updateTopbarHint();
+  }
+}
+
+autoLoadFromConfig();
 
 </script>
 </body>
