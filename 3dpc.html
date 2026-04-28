@@ -556,25 +556,16 @@ import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
    Set any of these to a URL string to auto-load on page open.
    Set to null to require manual file selection.
 
-   Pano matching modes:
-     'id'        — match filename to station.id (e.g. "5.jpg" → id "5")
-     'sequence'  — match by file order to station order in JSON
-                   (1st pano file → 1st station, 2nd → 2nd, …)
-     'id-shift'  — match filename N to station with id (N + PANO_ID_SHIFT)
-                   Use when filenames are 1-indexed but station ids are 0-indexed:
-                   PANO_ID_SHIFT = -1 means "1.jpg" → station id "0"
+   Stations JSON expected format (array of objects):
+     [{ filename: "1.jpg", x, y, z, qx, qy, qz, qw }, ...]
+   Optional: an "id" field for display; otherwise the filename without
+   extension is used as the station's display name.
 */
 const CONFIG = {
   PLY_URL:        null,         // e.g. './scans/site-a.ply'
   STATIONS_URL:   null,         // e.g. './scans/site-a-stations.json'
-  PANO_FOLDER:    null,         // e.g. './scans/site-a/panos/'  — preferred if all panos live together
-  PANO_EXT:       'jpg',        // file extension used when building URLs from PANO_FOLDER
-  PANO_URLS:      null,         // explicit list, used if PANO_FOLDER is not set
+  PANO_FOLDER:    null,         // e.g. './scans/site-a/panos/' — prepended to each station's filename
   PROJECT_NAME:   null,         // shown in topbar if set
-
-  PANO_MATCH_MODE: 'id-shift',  // 'id' | 'sequence' | 'id-shift'
-  PANO_ID_SHIFT:   -1,          // used when PANO_MATCH_MODE === 'id-shift'
-                                // -1 means file "1.jpg" → station with id 0
 
   UNIT_MODE:       'auto',      // 'auto' | 'm' | 'ft' | 'in' | 'mm'
   UP_AXIS:         'z',         // 'z' | 'y'
@@ -765,18 +756,27 @@ async function loadStationsFromText(text, displayName) {
   if (!arr.length) throw new Error('no stations in file');
 
   // clear existing
-  for (const m of markerMeshes.values()) markerGroup.remove(m);
+  for (const m of markerMeshes.values()) {
+    markerGroup.remove(m);
+    m.material.dispose();
+  }
   markerMeshes.clear();
   state.stations = [];
 
   for (const raw of arr) {
-    const id = String(raw.id);
+    if (!raw.filename) {
+      console.warn('Station missing filename, skipping:', raw);
+      continue;
+    }
+    const filename = String(raw.filename);
+    // Display name: explicit `id` field if present, else filename without extension
+    const id = raw.id != null ? String(raw.id) : filename.replace(/\.[^.]+$/, '');
     const position = new THREE.Vector3(raw.x, raw.y, raw.z);
     const quaternion = new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw).normalize();
-    state.stations.push({ id, position, quaternion, raw });
+    state.stations.push({ id, filename, position, quaternion, raw });
   }
 
-  // Sort stations naturally: numeric ids in numeric order, others lexicographic
+  // Sort naturally by display id: numeric in numeric order, else lexicographic
   state.stations.sort((a, b) => {
     const na = parseFloat(a.id), nb = parseFloat(b.id);
     const aNum = !isNaN(na) && String(na) === a.id;
@@ -820,55 +820,18 @@ document.getElementById('json-input').addEventListener('change', async (e) => {
   }
 });
 
-function matchPanoNameToStation(baseName, fileIndex) {
-  if (CONFIG.PANO_MATCH_MODE === 'sequence') {
-    return state.stations[fileIndex] || null;
-  }
-
-  if (CONFIG.PANO_MATCH_MODE === 'id-shift') {
-    const match = baseName.match(/(\d+)/);
-    if (!match) return null;
-    const fileNum = parseInt(match[1], 10);
-    const targetId = String(fileNum + CONFIG.PANO_ID_SHIFT);
-    return state.stations.find(s => s.id === targetId) || null;
-  }
-
-  // 'id' mode
-  let station = state.stations.find(s => baseName === s.id);
-  if (!station) {
-    station = state.stations.find(s => {
-      const re = new RegExp(`(^|[^0-9a-zA-Z])${s.id}([^0-9a-zA-Z]|$)`);
-      return re.test(baseName);
-    });
-  }
-  return station || null;
-}
-
-function basenameFromUrl(url) {
-  const path = url.split('?')[0].split('#')[0];
-  const file = path.split('/').pop();
-  return file.replace(/\.[^.]+$/, '');
-}
-
 document.getElementById('pano-input').addEventListener('change', async (e) => {
   const files = Array.from(e.target.files);
   if (!files.length) return;
   setLoadStatus('pano-btn', `loading ${files.length}…`);
 
-  // Sort sequentially-named files naturally for sequence mode
-  files.sort((a, b) => {
-    const na = parseInt((a.name.match(/(\d+)/) || ['0'])[0], 10);
-    const nb = parseInt((b.name.match(/(\d+)/) || ['0'])[0], 10);
-    return na - nb;
-  });
+  // Build a quick lookup of files by name
+  const fileByName = new Map(files.map(f => [f.name, f]));
 
   let matched = 0;
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const baseName = file.name.replace(/\.[^.]+$/, '');
-    const station = matchPanoNameToStation(baseName, i);
-    if (!station) continue;
-
+  for (const station of state.stations) {
+    const file = fileByName.get(station.filename);
+    if (!file) continue;
     const url = URL.createObjectURL(file);
     const tex = await loadTexture(url);
     state.panoTextures.set(station.id, tex);
@@ -876,7 +839,7 @@ document.getElementById('pano-input').addEventListener('change', async (e) => {
   }
 
   rebuildStationList();
-  setLoadStatus('pano-btn', `${matched}/${files.length} matched`, matched > 0);
+  setLoadStatus('pano-btn', `${matched}/${state.stations.length} matched`, matched > 0);
   updateTopbarHint();
 });
 
@@ -1357,38 +1320,15 @@ async function autoLoadFromConfig() {
 
   await Promise.all(tasks);
 
-  // Panos depend on stations being loaded first
-  let panoUrls = CONFIG.PANO_URLS;
-
-  // If a folder is configured, derive URLs from station list according to match mode
+  // Auto-load panos: each station knows its own filename; just prepend the folder.
   if (CONFIG.PANO_FOLDER && state.stations.length) {
     const folder = CONFIG.PANO_FOLDER.endsWith('/') ? CONFIG.PANO_FOLDER : CONFIG.PANO_FOLDER + '/';
-    const ext = CONFIG.PANO_EXT.replace(/^\./, '');
-    panoUrls = state.stations.map((station, i) => {
-      let num;
-      if (CONFIG.PANO_MATCH_MODE === 'sequence') {
-        num = i + 1;                                  // 1-indexed by position
-      } else if (CONFIG.PANO_MATCH_MODE === 'id-shift') {
-        num = parseInt(station.id, 10) - CONFIG.PANO_ID_SHIFT;
-      } else {
-        num = station.id;                              // 'id' — filename matches id literally
-      }
-      return `${folder}${num}.${ext}`;
-    });
-  }
+    setLoadStatus('pano-btn', `fetching ${state.stations.length}…`);
 
-  if (panoUrls && panoUrls.length && state.stations.length) {
-    setLoadStatus('pano-btn', `fetching ${panoUrls.length}…`);
     let matched = 0;
     let failed = 0;
-    for (let i = 0; i < panoUrls.length; i++) {
-      const url = panoUrls[i];
-      const baseName = basenameFromUrl(url);
-      const station = matchPanoNameToStation(baseName, i);
-      if (!station) {
-        console.warn(`No station match for pano: ${url}`);
-        continue;
-      }
+    for (const station of state.stations) {
+      const url = folder + station.filename;
       try {
         const tex = await loadTexture(url);
         state.panoTextures.set(station.id, tex);
@@ -1400,7 +1340,7 @@ async function autoLoadFromConfig() {
     }
     rebuildStationList();
     const failNote = failed > 0 ? ` (${failed} failed)` : '';
-    setLoadStatus('pano-btn', `${matched}/${panoUrls.length} loaded${failNote}`, matched > 0);
+    setLoadStatus('pano-btn', `${matched}/${state.stations.length} loaded${failNote}`, matched > 0);
     updateTopbarHint();
   }
 }
