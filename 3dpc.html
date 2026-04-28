@@ -572,8 +572,9 @@ const CONFIG = {
   PANO_URLS:      null,         // explicit list, used if PANO_FOLDER is not set
   PROJECT_NAME:   null,         // shown in topbar if set
 
-  PANO_MATCH_MODE: 'sequence',  // 'id' | 'sequence' | 'id-shift'
+  PANO_MATCH_MODE: 'id-shift',  // 'id' | 'sequence' | 'id-shift'
   PANO_ID_SHIFT:   -1,          // used when PANO_MATCH_MODE === 'id-shift'
+                                // -1 means file "1.jpg" → station with id 0
 
   UNIT_MODE:       'auto',      // 'auto' | 'm' | 'ft' | 'in' | 'mm'
   UP_AXIS:         'z',         // 'z' | 'y'
@@ -774,6 +775,15 @@ async function loadStationsFromText(text, displayName) {
     const quaternion = new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw).normalize();
     state.stations.push({ id, position, quaternion, raw });
   }
+
+  // Sort stations naturally: numeric ids in numeric order, others lexicographic
+  state.stations.sort((a, b) => {
+    const na = parseFloat(a.id), nb = parseFloat(b.id);
+    const aNum = !isNaN(na) && String(na) === a.id;
+    const bNum = !isNaN(nb) && String(nb) === b.id;
+    if (aNum && bNum) return na - nb;
+    return a.id.localeCompare(b.id);
+  });
 
   detectAndApplyUnits();
   rebuildMarkers();
