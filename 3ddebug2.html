@@ -215,21 +215,127 @@
           </select>
         </div>
         <div class="row">
-          <label>Quat order in JSON</label>
-          <select id="quat-order">
-            <option value="wxyz" selected>w,x,y,z (scalar-first)</option>
-            <option value="xyzw">x,y,z,w (scalar-last)</option>
+          <label>Quat permutation</label>
+          <select id="quat-perm">
+            <option value="wxyz" selected>(w,x,y,z) → THREE(x,y,z,w) [as labeled]</option>
+            <option value="wxzy">(w,x,z,y)</option>
+            <option value="wyxz">(w,y,x,z)</option>
+            <option value="wyzx">(w,y,z,x)</option>
+            <option value="wzxy">(w,z,x,y)</option>
+            <option value="wzyx">(w,z,y,x)</option>
+            <option value="xwyz">(x,w,y,z)</option>
+            <option value="xyzw">(x,y,z,w) → THREE(w,x,y,z)</option>
+            <option value="ywzx">(y,w,z,x)</option>
+            <option value="zwxy">(z,w,x,y)</option>
           </select>
         </div>
-        <div class="info">
-          If point cloud looks rotated 90° wrong, flip the up axis. If panos are correctly placed but rotated weirdly, flip the quat order.
+        <div class="row">
+          <label>Conjugate (invert rotation)</label>
+          <input type="checkbox" id="quat-conjugate">
         </div>
+        <div class="row">
+          <label>Negate qx</label>
+          <input type="checkbox" id="negate-qx">
+        </div>
+        <div class="row">
+          <label>Negate qy</label>
+          <input type="checkbox" id="negate-qy">
+        </div>
+        <div class="row">
+          <label>Negate qz</label>
+          <input type="checkbox" id="negate-qz">
+        </div>
+        <div class="row">
+          <label>Negate qw</label>
+          <input type="checkbox" id="negate-qw">
+        </div>
+        <div class="info">
+          If panos are rotated differently per station, the quat encoding is wrong. Try: conjugate first, then permutations, then component negations. Watch the colored axis lines on each marker — when those align with the actual scanner orientations in the scene, the encoding is right.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header" data-toggle><span>Station Transform</span><span class="toggle-collapse"></span></div>
+      <div class="section-content">
+        <div class="info">Apply scale + offset to station coordinates to align them with the PLY. Use auto-fit to guess.</div>
+        <div class="row">
+          <label>Scale</label>
+          <input type="range" id="station-scale" min="0.001" max="1000" step="0.001" value="1">
+          <input type="number" id="station-scale-n" value="1" step="0.1">
+        </div>
+        <div class="row">
+          <label>Offset X</label>
+          <input type="number" id="station-tx" value="0" step="1" style="width:100%">
+        </div>
+        <div class="row">
+          <label>Offset Y</label>
+          <input type="number" id="station-ty" value="0" step="1" style="width:100%">
+        </div>
+        <div class="row">
+          <label>Offset Z</label>
+          <input type="number" id="station-tz" value="0" step="1" style="width:100%">
+        </div>
+        <button class="btn primary" id="auto-fit">⚡ Auto-fit stations to PLY bounds</button>
+        <button class="btn" id="reset-transform">Reset transform</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header" data-toggle><span>Quaternion Convention</span><span class="toggle-collapse"></span></div>
+      <div class="section-content">
+        <div class="info">If pano rotation varies per station (not consistent error), try these.</div>
+        <div class="row">
+          <label>Invert (conjugate)</label>
+          <input type="checkbox" id="quat-invert">
+        </div>
+        <div class="row">
+          <label>Negate qw</label>
+          <input type="checkbox" id="quat-neg-w">
+        </div>
+        <div class="row">
+          <label>Negate qx</label>
+          <input type="checkbox" id="quat-neg-x">
+        </div>
+        <div class="row">
+          <label>Negate qy</label>
+          <input type="checkbox" id="quat-neg-y">
+        </div>
+        <div class="row">
+          <label>Negate qz</label>
+          <input type="checkbox" id="quat-neg-z">
+        </div>
+        <div class="row">
+          <label>Component remap</label>
+          <select id="quat-remap">
+            <option value="xyz">x,y,z (no swap)</option>
+            <option value="xzy">x,z,y (swap y↔z)</option>
+            <option value="yxz">y,x,z (swap x↔y)</option>
+            <option value="zyx">z,y,x (swap x↔z)</option>
+            <option value="yzx">y,z,x (cyclic)</option>
+            <option value="zxy">z,x,y (cyclic)</option>
+          </select>
+        </div>
+        <div class="info">"Component remap" reassigns which JSON axis becomes which Three.js axis. Often needed when the source data is in Z-up but you're applying it in Y-up space.</div>
       </div>
     </div>
 
     <div class="section">
       <div class="section-header" data-toggle><span>Pano Sphere</span><span class="toggle-collapse"></span></div>
       <div class="section-content">
+        <div class="row">
+          <label>Base orientation</label>
+          <select id="base-orient">
+            <option value="none">None (raw)</option>
+            <option value="x-rot-90">Rotate sphere +90° X (Z-up scanner → Y-up sphere)</option>
+            <option value="x-rot-neg90">Rotate sphere -90° X</option>
+            <option value="z-rot-90">Rotate sphere +90° Z</option>
+            <option value="z-rot-neg90">Rotate sphere -90° Z</option>
+            <option value="x-then-y">Rot +90° X, then +90° Y</option>
+            <option value="x-then-neg-y">Rot +90° X, then -90° Y</option>
+          </select>
+        </div>
+        <div class="info">Aligns the sphere's pole with the scanner's vertical axis. Try options until the black nadir is on the floor.</div>
         <div class="row">
           <label>Radius</label>
           <input type="range" id="sphere-radius" min="0.5" max="100" step="0.5" value="20">
@@ -262,6 +368,10 @@
         <div class="row">
           <label>Flip texture V</label>
           <input type="checkbox" id="flip-v">
+        </div>
+        <div class="row">
+          <label>Apply station rotation</label>
+          <input type="checkbox" id="apply-station-rot" checked>
         </div>
         <div class="row">
           <label>Depth write</label>
@@ -399,6 +509,16 @@ const state = {
   markerSize: 0.3,
   showForward: true,
   showAllSpheres: false,
+  stationScale: 1,
+  stationOffset: new THREE.Vector3(0, 0, 0),
+  baseOrient: 'none',
+  applyStationRot: true,
+  quatPerm: 'wxyz',
+  quatConjugate: false,
+  negateQx: false,
+  negateQy: false,
+  negateQz: false,
+  negateQw: false,
 };
 
 // --- coordinate system handling ---
@@ -542,26 +662,69 @@ function updateDiagnostics() {
   diag.textContent = txt;
 }
 
-function buildQuaternion(raw) {
-  if (state.quatOrder === 'wxyz') {
-    return new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw);
-  } else {
-    // assume the JSON's "qw" field is actually w but listed last — read literally
-    return new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw);
+function getTransformedPosition(rawPos) {
+  return rawPos.clone().multiplyScalar(state.stationScale).add(state.stationOffset);
+}
+
+function applyStationTransform() {
+  // update marker, forward-line, and sphere positions for all stations
+  for (const station of state.stations) {
+    const p = getTransformedPosition(station.position);
+    const marker = state.markers.get(station.id);
+    if (marker) marker.position.copy(p);
+    const line = state.forwardLines.get(station.id);
+    if (line) line.position.copy(p);
+    const sphere = state.spheres.get(station.id);
+    if (sphere) sphere.position.copy(p);
   }
-  // Note: both branches construct Three.js's (x,y,z,w) ordering. The toggle
-  // exists because some users may pass JSON where the FIELD ORDER is different
-  // even if field names are the same — but since we read by field name, the
-  // toggle currently has no effect. Kept for future-proofing if you switch
-  // to positional parsing.
+}
+
+function buildQuaternion(raw) {
+  // start from labeled values, with optional negations
+  let qw = state.negateQw ? -raw.qw : raw.qw;
+  let qx = state.negateQx ? -raw.qx : raw.qx;
+  let qy = state.negateQy ? -raw.qy : raw.qy;
+  let qz = state.negateQz ? -raw.qz : raw.qz;
+
+  // permutation: reinterpret which labeled value goes into which slot
+  // The KEY in the dropdown describes the source order; we map to THREE's (x,y,z,w)
+  let tx, ty, tz, tw;
+  switch (state.quatPerm) {
+    case 'wxyz': tx = qx; ty = qy; tz = qz; tw = qw; break;
+    case 'wxzy': tx = qx; ty = qz; tz = qy; tw = qw; break;
+    case 'wyxz': tx = qy; ty = qx; tz = qz; tw = qw; break;
+    case 'wyzx': tx = qy; ty = qz; tz = qx; tw = qw; break;
+    case 'wzxy': tx = qz; ty = qx; tz = qy; tw = qw; break;
+    case 'wzyx': tx = qz; ty = qy; tz = qx; tw = qw; break;
+    case 'xwyz': tx = qw; ty = qy; tz = qz; tw = qx; break;
+    case 'xyzw': tx = qw; ty = qx; tz = qy; tw = qz; break; // labeled qw is actually x, etc
+    case 'ywzx': tx = qz; ty = qw; tz = qx; tw = qy; break;
+    case 'zwxy': tx = qy; ty = qz; tz = qw; tw = qx; break;
+    default:     tx = qx; ty = qy; tz = qz; tw = qw;
+  }
+
+  const q = new THREE.Quaternion(tx, ty, tz, tw);
+  q.normalize();
+  if (state.quatConjugate) q.conjugate();
+  return q;
+}
+
+function rebuildAllStationOrientations() {
+  for (const station of state.stations) {
+    station.quaternion = buildQuaternion(station.raw);
+    const line = state.forwardLines.get(station.id);
+    if (line) line.quaternion.copy(station.quaternion);
+  }
+  rebuildAllSpheres();
 }
 
 function addStationMarker(id, pos, q) {
+  const transformed = getTransformedPosition(pos);
   // marker sphere
   const markerGeom = new THREE.SphereGeometry(state.markerSize, 16, 12);
   const markerMat = new THREE.MeshBasicMaterial({ color: 0xff7b29 });
   const marker = new THREE.Mesh(markerGeom, markerMat);
-  marker.position.copy(pos);
+  marker.position.copy(transformed);
   marker.userData.stationId = id;
   marker.visible = state.showMarkers;
   coordRoot.add(marker);
@@ -584,7 +747,7 @@ function addStationMarker(id, pos, q) {
   lineGeom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   const lineMat = new THREE.LineBasicMaterial({ vertexColors: true });
   const line = new THREE.LineSegments(lineGeom, lineMat);
-  line.position.copy(pos);
+  line.position.copy(transformed);
   line.quaternion.copy(q);
   line.visible = state.showForward;
   coordRoot.add(line);
@@ -599,13 +762,22 @@ document.getElementById('pano-files').addEventListener('change', async (e) => {
   label.textContent = `↻ Loading ${files.length} panos…`;
 
   let loaded = 0;
+  const unmatched = [];
   for (const file of files) {
-    // match by id substring in filename
+    // match by id - prefer exact match, then "ends with id" (e.g. station_10.jpg), then includes
     const baseName = file.name.replace(/\.[^.]+$/, '');
-    const station = state.stations.find(s =>
-      baseName === s.id || baseName.includes(s.id) || s.id.includes(baseName)
-    );
-    if (!station) continue;
+    let station = state.stations.find(s => baseName === s.id);
+    if (!station) {
+      // try matching where the id is a clean suffix or prefix (separated by non-alphanumeric)
+      station = state.stations.find(s => {
+        const re = new RegExp(`(^|[^0-9a-zA-Z])${s.id}([^0-9a-zA-Z]|$)`);
+        return re.test(baseName);
+      });
+    }
+    if (!station) {
+      unmatched.push(file.name);
+      continue;
+    }
 
     const url = URL.createObjectURL(file);
     const tex = await new Promise((resolve, reject) => {
@@ -618,12 +790,43 @@ document.getElementById('pano-files').addEventListener('change', async (e) => {
     loaded++;
   }
 
-  label.textContent = `✓ ${loaded}/${files.length} panos matched to stations`;
+  label.textContent = `✓ ${loaded}/${files.length} matched` + (unmatched.length ? ` (no match: ${unmatched.slice(0,3).join(', ')}${unmatched.length > 3 ? '…' : ''})` : '');
   label.classList.add('loaded');
   rebuildStationList();
 });
 
 // --- pano sphere management ---
+function getBaseOrientationQuaternion() {
+  const q = new THREE.Quaternion();
+  switch (state.baseOrient) {
+    case 'x-rot-90':
+      q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      break;
+    case 'x-rot-neg90':
+      q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      break;
+    case 'z-rot-90':
+      q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      break;
+    case 'z-rot-neg90':
+      q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2);
+      break;
+    case 'x-then-y': {
+      const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+      q.multiplyQuaternions(qy, qx);
+      break;
+    }
+    case 'x-then-neg-y': {
+      const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+      q.multiplyQuaternions(qy, qx);
+      break;
+    }
+  }
+  return q;
+}
+
 function buildSphereForStation(stationId) {
   const station = state.stations.find(s => s.id === stationId);
   const tex = state.panoTextures.get(stationId);
@@ -655,23 +858,32 @@ function buildSphereForStation(stationId) {
     depthWrite: state.depthWrite,
   });
   const sphere = new THREE.Mesh(geom, mat);
-  sphere.position.copy(station.position);
+  sphere.position.copy(getTransformedPosition(station.position));
 
-  // station's own orientation
-  const stationQ = station.quaternion.clone();
-
-  // user-tunable offsets (applied AFTER station orientation, in station-local space)
+  // Composition order (applied right-to-left to a vector):
+  //   final = stationQ * offsetQ * baseQ
+  // baseQ:    rotates the sphere's geometry frame so its pole aligns with scanner-down
+  // offsetQ:  user-tunable seam/pitch/roll fine-tune (in scanner-local frame)
+  // stationQ: scanner's recorded orientation in world space
+  const baseQ = getBaseOrientationQuaternion();
   const offsetEuler = new THREE.Euler(
     THREE.MathUtils.degToRad(state.pitchOffset),
-    THREE.MathUtils.degToRad(state.seamOffset),  // yaw — rotates seam around vertical
+    THREE.MathUtils.degToRad(state.seamOffset),
     THREE.MathUtils.degToRad(state.rollOffset),
     'YXZ'
   );
   const offsetQ = new THREE.Quaternion().setFromEuler(offsetEuler);
 
-  sphere.quaternion.copy(stationQ).multiply(offsetQ);
+  const finalQ = new THREE.Quaternion();
+  if (state.applyStationRot) {
+    finalQ.copy(station.quaternion).multiply(offsetQ).multiply(baseQ);
+  } else {
+    finalQ.multiplyQuaternions(offsetQ, baseQ);
+  }
+  sphere.quaternion.copy(finalQ);
+
   sphere.userData.stationId = stationId;
-  sphere.renderOrder = -1; // render before points
+  sphere.renderOrder = -1;
 
   coordRoot.add(sphere);
   state.spheres.set(stationId, sphere);
@@ -710,11 +922,12 @@ function setActiveStation(stationId) {
   if (stationId) {
     const station = state.stations.find(s => s.id === stationId);
     if (station) {
-      const worldPos = station.position.clone().applyMatrix4(coordRoot.matrixWorld);
+      const transformedPos = getTransformedPosition(station.position);
+      const worldPos = transformedPos.clone().applyMatrix4(coordRoot.matrixWorld);
       camera.position.copy(worldPos);
       // look down station's local +Y (forward) by default
       const fwd = new THREE.Vector3(0, 1, 0).applyQuaternion(station.quaternion);
-      const localTarget = station.position.clone().add(fwd);
+      const localTarget = transformedPos.clone().add(fwd);
       const worldTarget = localTarget.applyMatrix4(coordRoot.matrixWorld);
       controls.target.copy(worldTarget);
       controls.update();
@@ -842,6 +1055,12 @@ bindSlider('marker-size', 'markerSize', () => {
 bindCheckbox('flip-u', 'flipU', rebuildAllSpheres);
 bindCheckbox('flip-v', 'flipV', rebuildAllSpheres);
 bindCheckbox('depth-write', 'depthWrite', rebuildAllSpheres);
+bindCheckbox('apply-station-rot', 'applyStationRot', rebuildAllSpheres);
+
+document.getElementById('base-orient').addEventListener('change', (e) => {
+  state.baseOrient = e.target.value;
+  rebuildAllSpheres();
+});
 bindCheckbox('show-points', 'showPoints', () => {
   if (state.pointCloud) state.pointCloud.visible = state.showPoints;
 });
@@ -862,15 +1081,91 @@ document.getElementById('up-axis').addEventListener('change', (e) => {
   state.upAxis = e.target.value;
   applyUpAxis();
 });
-document.getElementById('quat-order').addEventListener('change', (e) => {
-  state.quatOrder = e.target.value;
-  // rebuild station orientations (and spheres)
-  for (const station of state.stations) {
-    station.quaternion = buildQuaternion(station.raw);
-    const line = state.forwardLines.get(station.id);
-    if (line) line.quaternion.copy(station.quaternion);
+
+// --- station transform wiring ---
+function bindTransformInput(id, getter, setter) {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    setter(parseFloat(el.value) || 0);
+    applyStationTransform();
+  });
+}
+
+const scaleSlider = document.getElementById('station-scale');
+const scaleNumber = document.getElementById('station-scale-n');
+function setStationScale(v) {
+  state.stationScale = v;
+  scaleSlider.value = v;
+  scaleNumber.value = v;
+  applyStationTransform();
+}
+scaleSlider.addEventListener('input', () => setStationScale(parseFloat(scaleSlider.value)));
+scaleNumber.addEventListener('input', () => setStationScale(parseFloat(scaleNumber.value)));
+
+bindTransformInput('station-tx', () => state.stationOffset.x, (v) => state.stationOffset.x = v);
+bindTransformInput('station-ty', () => state.stationOffset.y, (v) => state.stationOffset.y = v);
+bindTransformInput('station-tz', () => state.stationOffset.z, (v) => state.stationOffset.z = v);
+
+document.getElementById('reset-transform').addEventListener('click', () => {
+  setStationScale(1);
+  state.stationOffset.set(0, 0, 0);
+  document.getElementById('station-tx').value = 0;
+  document.getElementById('station-ty').value = 0;
+  document.getElementById('station-tz').value = 0;
+  applyStationTransform();
+});
+
+document.getElementById('auto-fit').addEventListener('click', () => {
+  if (!state.stations.length || !state.pointCloud) {
+    alert('Need both PLY and stations loaded to auto-fit.');
+    return;
   }
-  rebuildAllSpheres();
+  // compute station bounds (raw)
+  const xs = state.stations.map(s => s.position.x);
+  const ys = state.stations.map(s => s.position.y);
+  const zs = state.stations.map(s => s.position.z);
+  const sMin = new THREE.Vector3(Math.min(...xs), Math.min(...ys), Math.min(...zs));
+  const sMax = new THREE.Vector3(Math.max(...xs), Math.max(...ys), Math.max(...zs));
+  const sCenter = sMin.clone().add(sMax).multiplyScalar(0.5);
+  const sSize = sMax.clone().sub(sMin);
+
+  // PLY bounds (raw, before any transform)
+  const pBox = state.pointCloud.geometry.boundingBox;
+  const pCenter = new THREE.Vector3();
+  pBox.getCenter(pCenter);
+  const pSize = new THREE.Vector3();
+  pBox.getSize(pSize);
+
+  // estimate scale: ratio of largest extents (avoid near-zero axes)
+  const sExtent = Math.max(sSize.x, sSize.y, sSize.z, 0.01);
+  const pExtent = Math.max(pSize.x, pSize.y, pSize.z, 0.01);
+  const scale = pExtent / sExtent;
+
+  // offset: align centers after scaling
+  const offset = pCenter.clone().sub(sCenter.clone().multiplyScalar(scale));
+
+  setStationScale(scale);
+  state.stationOffset.copy(offset);
+  document.getElementById('station-tx').value = offset.x.toFixed(2);
+  document.getElementById('station-ty').value = offset.y.toFixed(2);
+  document.getElementById('station-tz').value = offset.z.toFixed(2);
+  applyStationTransform();
+});
+document.getElementById('quat-perm').addEventListener('change', (e) => {
+  state.quatPerm = e.target.value;
+  rebuildAllStationOrientations();
+});
+document.getElementById('quat-conjugate').addEventListener('change', (e) => {
+  state.quatConjugate = e.target.checked;
+  rebuildAllStationOrientations();
+});
+['qx', 'qy', 'qz', 'qw'].forEach(comp => {
+  const id = 'negate-' + comp;
+  const stateKey = 'negate' + comp.charAt(0).toUpperCase() + comp.slice(1);
+  document.getElementById(id).addEventListener('change', (e) => {
+    state[stateKey] = e.target.checked;
+    rebuildAllStationOrientations();
+  });
 });
 
 // --- collapse sections ---
@@ -882,8 +1177,14 @@ document.querySelectorAll('[data-toggle]').forEach(h => {
 document.getElementById('copy-settings').addEventListener('click', () => {
   const settings = {
     upAxis: state.upAxis,
-    quatOrder: state.quatOrder,
+    quatPerm: state.quatPerm,
+    quatConjugate: state.quatConjugate,
+    negate: { qx: state.negateQx, qy: state.negateQy, qz: state.negateQz, qw: state.negateQw },
+    stationScale: state.stationScale,
+    stationOffset: { x: state.stationOffset.x, y: state.stationOffset.y, z: state.stationOffset.z },
     sphereRadius: state.sphereRadius,
+    baseOrient: state.baseOrient,
+    applyStationRot: state.applyStationRot,
     seamOffsetDeg: state.seamOffset,
     pitchOffsetDeg: state.pitchOffset,
     rollOffsetDeg: state.rollOffset,
