@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Scan Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0d0e;
+    --panel: #17171a;
+    --panel-2: #1f1f23;
+    --border: #2a2a2f;
+    --border-strong: #3a3a40;
+    --text: #e2e2e4;
+    --text-dim: #888890;
+    --text-faint: #56565c;
+    --accent: #ff7b29;
+    --accent-soft: rgba(255, 123, 41, 0.12);
+    --accent-line: rgba(255, 123, 41, 0.35);
+    --good: #5eb95e;
+    --measure: #4ec9ff;
+    --measure-soft: rgba(78, 201, 255, 0.15);
+    --bar-h: 40px;
+    --rail-w: 240px;
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font-family: inherit; font-size: inherit; color: inherit; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  /* ============================================================
+     LAYOUT
+     ============================================================ */
+  #app {
+    display: grid;
+    grid-template-rows: var(--bar-h) 1fr;
+    height: 100vh;
+  }
+
+  #topbar {
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    gap: 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  #topbar .title {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-size: 13px;
+  }
+  #topbar .title .accent {
+    color: var(--accent);
+    margin-right: 4px;
+  }
+  #topbar .project {
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 12px;
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border);
+  }
+  #topbar .spacer { flex: 1; }
+  #topbar .mode-switch {
+    display: flex;
+    background: var(--panel-2);
+    border-radius: 5px;
+    padding: 2px;
+    gap: 2px;
+  }
+  #topbar .mode-btn {
+    padding: 4px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    transition: all 0.12s;
+  }
+  #topbar .mode-btn:hover { color: var(--text); }
+  #topbar .mode-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  #topbar .hint {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+
+  #main {
+    display: grid;
+    grid-template-columns: var(--rail-w) 1fr;
+    overflow: hidden;
+  }
+
+  /* ============================================================
+     RAIL
+     ============================================================ */
+  #rail {
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .rail-section { border-bottom: 1px solid var(--border); }
+  .rail-section:last-child { border-bottom: none; flex: 1; display: flex; flex-direction: column; }
+  .rail-header {
+    padding: 9px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .rail-header .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  .rail-header .meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+
+  #station-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 8px;
+  }
+  .station {
+    padding: 7px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-left: 2px solid transparent;
+    transition: background 0.08s;
+  }
+  .station:hover { background: var(--panel-2); }
+  .station.active {
+    background: var(--accent-soft);
+    border-left-color: var(--accent);
+  }
+  .station .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    flex-shrink: 0;
+  }
+  .station.has-pano .dot { background: var(--accent); }
+  .station.active .dot { background: var(--text); }
+  .station .name {
+    flex: 1;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .station.disabled { cursor: default; opacity: 0.5; }
+  .station .pos {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+
+  /* Load buttons */
+  #load-section { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .file-btn {
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+    font-size: 11px;
+    transition: all 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .file-btn:hover { background: var(--border); border-color: var(--accent-line); }
+  .file-btn.loaded { border-color: var(--good); }
+  .file-btn .ico { opacity: 0.7; }
+  .file-btn .status {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-faint);
+    font-family: var(--font-mono);
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-btn.loaded .status { color: var(--good); }
+  .file-input { display: none; }
+
+  /* Measurements list */
+  #measurements {
+    padding: 0;
+  }
+  .measurement {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .measurement:hover { background: var(--panel-2); }
+  .measurement .dist {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--measure);
+    font-weight: 500;
+  }
+  .measurement .meta {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-faint);
+  }
+  .measurement .delete {
+    align-self: flex-end;
+    background: none;
+    border: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 4px;
+    border-radius: 2px;
+  }
+  .measurement .delete:hover { color: #ff5555; background: rgba(255, 85, 85, 0.1); }
+  .empty-list {
+    padding: 14px;
+    color: var(--text-faint);
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  /* ============================================================
+     VIEWPORT
+     ============================================================ */
+  #viewport-container {
+    position: relative;
+    overflow: hidden;
+    background: #050506;
+  }
+  #viewport-container canvas { display: block; outline: none; }
+
+  .vp-overlay {
+    position: absolute;
+    top: 12px;
+    padding: 5px 10px;
+    background: rgba(20, 20, 22, 0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    pointer-events: none;
+    color: var(--text-dim);
+  }
+  .vp-overlay.left { left: 12px; }
+  .vp-overlay.right { right: 12px; }
+  .vp-overlay .label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10px;
+  }
+  .vp-overlay .accent {
+    color: var(--accent);
+    font-weight: 600;
+    margin-left: 6px;
+    font-family: var(--font-mono);
+  }
+  .vp-overlay .mono { font-size: 10px; color: var(--text-faint); margin-left: 6px; }
+
+  /* Bottom controls dock */
+  #dock {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(20, 20, 22, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 6px;
+    z-index: 50;
+  }
+  .dock-group {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+  }
+  .dock-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+  .dock-btn {
+    padding: 6px 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 500;
+    transition: all 0.1s;
+  }
+  .dock-btn:hover { background: var(--panel-2); color: var(--text); }
+  .dock-btn:disabled { opacity: 0.3; cursor: default; }
+  .dock-btn:disabled:hover { background: transparent; color: var(--text-dim); }
+  .dock-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .dock-btn.measure-active {
+    background: var(--measure-soft);
+    color: var(--measure);
+  }
+  .dock-btn .kbd {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    opacity: 0.5;
+    margin-left: 3px;
+  }
+
+  /* Transparency slider in dock */
+  .dock-slider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    min-width: 180px;
+  }
+  .dock-slider .icon {
+    color: var(--text-faint);
+    font-size: 14px;
+  }
+  .dock-slider input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+    height: 4px;
+  }
+  .dock-slider .value {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    width: 32px;
+    text-align: right;
+  }
+
+  /* Empty state */
+  .vp-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-faint);
+    text-align: center;
+    padding: 40px;
+    pointer-events: none;
+  }
+  .vp-empty .heading {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+  .vp-empty .body {
+    font-size: 11px;
+    line-height: 1.5;
+    max-width: 280px;
+  }
+
+  /* Settings popover */
+  #settings-popover {
+    position: absolute;
+    top: 50px;
+    right: 14px;
+    width: 280px;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
+    z-index: 200;
+    display: none;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  #settings-popover.show { display: block; }
+  #settings-popover .section + .section {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  #settings-popover .section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+  .field label { flex: 1; color: var(--text-dim); }
+  .field input[type="range"] { flex: 1.4; accent-color: var(--accent); height: 3px; }
+  .field input[type="number"] {
+    width: 56px;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+  .field select {
+    flex: 1.4;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+  .field input[type="checkbox"] { accent-color: var(--accent); }
+
+  .icon-btn {
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn:hover {
+    background: var(--panel-2);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .icon-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent-line);
+  }
+
+  /* Cursor states for measurement */
+  #viewport-container.measuring canvas { cursor: crosshair; }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <div id="topbar">
+    <div class="title"><span class="accent">◆</span>Scan Viewer<span class="project" id="project-name" style="display:none"></span></div>
+    <div class="spacer"></div>
+    <div class="hint" id="topbar-hint">Load PLY + stations to begin</div>
+    <button class="icon-btn" id="settings-btn" title="Settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+
+  <div id="main">
+
+    <div id="rail">
+      <div class="rail-section">
+        <div class="rail-header">
+          <div class="label">Stations</div>
+          <div class="meta" id="station-count">—</div>
+        </div>
+        <div id="station-list">
+          <div class="empty-list">Load a stations JSON to populate.</div>
+        </div>
+      </div>
+
+      <div class="rail-section">
+        <div class="rail-header">
+          <div class="label">Measurements</div>
+          <div class="meta" id="measurement-count">0</div>
+        </div>
+        <div id="measurements">
+          <div class="empty-list">Press <span class="mono" style="color:var(--measure)">M</span> or click the ruler in the dock, then click two points in the scene.</div>
+        </div>
+      </div>
+
+      <div class="rail-section" style="flex:0 0 auto;">
+        <div id="load-section">
+          <input type="file" id="ply-input" accept=".ply" class="file-input">
+          <button class="file-btn" data-target="ply-input" id="ply-btn">
+            <span class="ico">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+            </span>
+            PLY
+            <span class="status">empty</span>
+          </button>
+          <input type="file" id="json-input" accept=".json" class="file-input">
+          <button class="file-btn" data-target="json-input" id="json-btn">
+            <span class="ico">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            </span>
+            Stations
+            <span class="status">empty</span>
+          </button>
+          <input type="file" id="pano-input" accept="image/*" multiple class="file-input">
+          <button class="file-btn" data-target="pano-input" id="pano-btn">
+            <span class="ico">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg>
+            </span>
+            Panos
+            <span class="status">empty</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="viewport-container">
+      <div class="vp-overlay left">
+        <span class="label">View</span>
+        <span class="accent" id="vp-mode-label">Free</span>
+        <span class="mono" id="vp-station-label"></span>
+      </div>
+      <div class="vp-overlay right" id="vp-units"></div>
+
+      <div class="vp-empty" id="vp-empty">
+        <div>
+          <div class="heading">No data loaded</div>
+          <div class="body">Load a PLY point cloud and stations JSON to start.<br>Then add pano images for full immersion.</div>
+        </div>
+      </div>
+
+      <div id="dock">
+        <div class="dock-group">
+          <button class="dock-btn" id="exit-pano-btn" disabled title="Exit pano (Esc)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            Exit
+          </button>
+          <button class="dock-btn" id="prev-station-btn" disabled title="Previous (←)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <button class="dock-btn" id="next-station-btn" disabled title="Next (→)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+
+        <div class="dock-divider" id="dock-div-1"></div>
+
+        <div class="dock-slider" id="alpha-slider">
+          <span class="icon" title="Pano opacity">◐</span>
+          <input type="range" id="alpha-input" min="0" max="1" step="0.01" value="1">
+          <span class="value mono" id="alpha-value">100%</span>
+        </div>
+
+        <div class="dock-divider"></div>
+
+        <div class="dock-group">
+          <button class="dock-btn" id="measure-btn" title="Measure (M)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.3 8.7L8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="M7 15l3 3"/><path d="M11 11l3 3"/><path d="M15 7l3 3"/></svg>
+            Measure
+            <span class="kbd">M</span>
+          </button>
+          <button class="dock-btn" id="clear-measure-btn" title="Clear all">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="settings-popover">
+    <div class="section">
+      <div class="section-label">Coordinate System</div>
+      <div class="field">
+        <label>Up axis</label>
+        <select id="up-axis">
+          <option value="z" selected>Z-up</option>
+          <option value="y">Y-up</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Cloud units</label>
+        <select id="unit-mode">
+          <option value="auto" selected>Auto-detect</option>
+          <option value="m">Meters</option>
+          <option value="ft">Feet</option>
+          <option value="in">Inches</option>
+          <option value="mm">Millimeters</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Pano Orientation <span style="color:var(--text-faint);font-weight:400;text-transform:none;letter-spacing:0;">— global, applies to all stations</span></div>
+      <div class="field">
+        <label>Base rotation</label>
+        <select id="base-orient">
+          <option value="x90" selected>Z-up scanner (+90° X)</option>
+          <option value="none">Raw (no correction)</option>
+          <option value="x-90">−90° X</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Seam yaw</label>
+        <input type="range" id="seam-offset" min="-180" max="180" step="1" value="0">
+        <input type="number" id="seam-offset-n" value="0" step="1">
+      </div>
+      <div class="field">
+        <label>Pitch</label>
+        <input type="range" id="pitch-offset" min="-30" max="30" step="0.5" value="0">
+        <input type="number" id="pitch-offset-n" value="0" step="0.5">
+      </div>
+      <div class="field">
+        <label>Roll</label>
+        <input type="range" id="roll-offset" min="-30" max="30" step="0.5" value="0">
+        <input type="number" id="roll-offset-n" value="0" step="0.5">
+      </div>
+      <div class="field">
+        <label>Apply station rotation</label>
+        <input type="checkbox" id="apply-station-rot" checked>
+      </div>
+      <div class="field">
+        <label>Sphere radius</label>
+        <input type="range" id="sphere-radius" min="2" max="50" step="0.5" value="15">
+        <input type="number" id="sphere-radius-n" value="15" step="0.5">
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Display</div>
+      <div class="field">
+        <label>Point size</label>
+        <input type="range" id="point-size" min="0.5" max="6" step="0.1" value="1.5">
+      </div>
+      <div class="field">
+        <label>Show markers</label>
+        <input type="checkbox" id="show-markers" checked>
+      </div>
+      <div class="field">
+        <label>Show grid</label>
+        <input type="checkbox" id="show-grid" checked>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+/* ============================================================
+   PROJECT CONFIG
+   ============================================================
+   Stations JSON expected format (array):
+     [{ filename: "1.jpg", x, y, z, qx, qy, qz, qw }, ...]
+*/
+const CONFIG = {
+  PLY_URL:        null,
+  STATIONS_URL:   null,
+  PANO_FOLDER:    null,
+  PROJECT_NAME:   null,
+  UNIT_MODE:      'auto',
+  UP_AXIS:        'z',
+};
+
+const state = {
+  pointCloud: null,
+  stations: [],
+  panoTextures: new Map(),
+  panoSpheres: new Map(),     // id -> Mesh (built lazily)
+  activeStationId: null,
+  unitScale: 1,
+  unitMode: CONFIG.UNIT_MODE,
+  detectedUnit: null,
+  upAxis: CONFIG.UP_AXIS,
+  pointSize: 1.5,
+  showMarkers: true,
+  showGrid: true,
+
+  // Pano orientation (global, debug-tunable)
+  baseOrient: 'x90',
+  seamOffset: 0,
+  pitchOffset: 0,
+  rollOffset: 0,
+  applyStationRot: true,
+  sphereRadius: 15,
+
+  // Pano alpha (0 = invisible, 1 = opaque)
+  panoAlpha: 1,
+
+  // Measurement state
+  measuring: false,
+  pendingPoint: null,         // first click of a measurement
+  measurements: [],           // [{a: Vector3, b: Vector3, dist: number, line: Line, labelDiv: HTMLElement}]
+};
+
+const MARKER_COLOR_IDLE = 0xff7b29;
+const MARKER_COLOR_ACTIVE = 0xffffff;
+
+/* ============================================================
+   THREE.JS SCENE
+   ============================================================ */
+const vpContainer = document.getElementById('viewport-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+vpContainer.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050506);
+
+const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 10000);
+camera.position.set(10, 10, 10);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+// Coord root rotates Z-up data into Three's Y-up
+const coordRoot = new THREE.Group();
+scene.add(coordRoot);
+
+let gridHelper = new THREE.GridHelper(20, 20, 0x2a2a30, 0x1a1a1e);
+scene.add(gridHelper);
+
+const markerGroup = new THREE.Group();
+const sphereGroup = new THREE.Group();
+const measureGroup = new THREE.Group();
+coordRoot.add(markerGroup);
+coordRoot.add(sphereGroup);
+coordRoot.add(measureGroup);
+
+const markerMeshes = new Map(); // id -> Mesh
+
+// HTML labels overlay (for measurement labels)
+const labelsLayer = document.createElement('div');
+labelsLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+vpContainer.appendChild(labelsLayer);
+
+function applyUpAxis() {
+  if (state.upAxis === 'z') {
+    coordRoot.rotation.set(-Math.PI / 2, 0, 0);
+  } else {
+    coordRoot.rotation.set(0, 0, 0);
+  }
+}
+applyUpAxis();
+
+function resize() {
+  const w = vpContainer.clientWidth, h = vpContainer.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h || 1;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+new ResizeObserver(resize).observe(vpContainer);
+resize();
+
+/* ============================================================
+   FILE LOADING
+   ============================================================ */
+document.querySelectorAll('.file-btn').forEach(btn => {
+  btn.addEventListener('click', () => document.getElementById(btn.dataset.target).click());
+});
+
+function setLoadStatus(btnId, text, loaded = false) {
+  const btn = document.getElementById(btnId);
+  btn.querySelector('.status').textContent = text;
+  btn.classList.toggle('loaded', loaded);
+}
+
+async function loadPLYFromBuffer(buffer, displayName) {
+  const geom = new PLYLoader().parse(buffer);
+  geom.computeBoundingBox();
+
+  if (state.pointCloud) {
+    coordRoot.remove(state.pointCloud);
+    state.pointCloud.geometry.dispose();
+    state.pointCloud.material.dispose();
+  }
+
+  const hasColor = geom.hasAttribute('color');
+  const material = new THREE.PointsMaterial({
+    size: state.pointSize,
+    vertexColors: hasColor,
+    color: hasColor ? 0xffffff : 0xcccccc,
+    sizeAttenuation: false,
+  });
+  state.pointCloud = new THREE.Points(geom, material);
+  coordRoot.add(state.pointCloud);
+
+  detectAndApplyUnits();
+  applySceneScale();
+  rebuildSpatial();
+  frameAll();
+
+  document.getElementById('vp-empty').style.display = 'none';
+  setLoadStatus('ply-btn', displayName, true);
+  updateTopbarHint();
+}
+
+async function loadStationsFromText(text, displayName) {
+  const data = JSON.parse(text);
+  const arr = Array.isArray(data) ? data : (data.stations || data.locations || []);
+  if (!arr.length) throw new Error('no stations in file');
+
+  // Clear
+  for (const m of markerMeshes.values()) {
+    markerGroup.remove(m);
+    m.material.dispose();
+  }
+  markerMeshes.clear();
+  for (const s of state.panoSpheres.values()) {
+    sphereGroup.remove(s);
+    s.geometry.dispose();
+    s.material.dispose();
+  }
+  state.panoSpheres.clear();
+  state.stations = [];
+
+  for (const raw of arr) {
+    if (!raw.filename) {
+      console.warn('Station missing filename, skipping:', raw);
+      continue;
+    }
+    const filename = String(raw.filename);
+    const id = raw.id != null ? String(raw.id) : filename.replace(/\.[^.]+$/, '');
+    const position = new THREE.Vector3(raw.x, raw.y, raw.z);
+    const quaternion = new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw).normalize();
+    state.stations.push({ id, filename, position, quaternion, raw });
+  }
+
+  state.stations.sort((a, b) => {
+    const na = parseFloat(a.id), nb = parseFloat(b.id);
+    const aNum = !isNaN(na) && String(na) === a.id;
+    const bNum = !isNaN(nb) && String(nb) === b.id;
+    if (aNum && bNum) return na - nb;
+    return a.id.localeCompare(b.id);
+  });
+
+  detectAndApplyUnits();
+  rebuildSpatial();
+  rebuildStationList();
+  frameAll();
+  setLoadStatus('json-btn', `${state.stations.length} stations`, true);
+  updateTopbarHint();
+}
+
+document.getElementById('ply-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  setLoadStatus('ply-btn', 'loading…');
+  try {
+    await loadPLYFromBuffer(await file.arrayBuffer(), file.name);
+  } catch (err) { console.error(err); setLoadStatus('ply-btn', 'error'); }
+});
+
+document.getElementById('json-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  setLoadStatus('json-btn', 'loading…');
+  try {
+    await loadStationsFromText(await file.text(), file.name);
+  } catch (err) { console.error(err); setLoadStatus('json-btn', err.message); }
+});
+
+document.getElementById('pano-input').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  setLoadStatus('pano-btn', `loading ${files.length}…`);
+  const fileByName = new Map(files.map(f => [f.name, f]));
+  let matched = 0;
+  for (const station of state.stations) {
+    const file = fileByName.get(station.filename);
+    if (!file) continue;
+    const tex = await loadTexture(URL.createObjectURL(file));
+    state.panoTextures.set(station.id, tex);
+    matched++;
+  }
+  rebuildStationList();
+  setLoadStatus('pano-btn', `${matched}/${state.stations.length}`, matched > 0);
+  updateTopbarHint();
+});
+
+function loadTexture(url) {
+  return new Promise((resolve, reject) => {
+    new THREE.TextureLoader().load(url, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      resolve(tex);
+    }, undefined, reject);
+  });
+}
+
+/* ============================================================
+   UNIT DETECTION
+   ============================================================ */
+function detectAndApplyUnits() {
+  if (state.unitMode !== 'auto') {
+    state.unitScale = ({ m: 1, ft: 0.3048, in: 0.0254, mm: 0.001 })[state.unitMode] || 1;
+    state.detectedUnit = state.unitMode;
+    updateUnitsLabel();
+    return;
+  }
+  if (!state.pointCloud || !state.stations.length) {
+    state.unitScale = 1; state.detectedUnit = null;
+    updateUnitsLabel(); return;
+  }
+  const pBox = state.pointCloud.geometry.boundingBox;
+  const pSize = new THREE.Vector3(); pBox.getSize(pSize);
+  const pExtent = Math.max(pSize.x, pSize.y, pSize.z);
+  const xs = state.stations.map(s => s.position.x);
+  const ys = state.stations.map(s => s.position.y);
+  const zs = state.stations.map(s => s.position.z);
+  const sExtent = Math.max(
+    Math.max(...xs) - Math.min(...xs),
+    Math.max(...ys) - Math.min(...ys),
+    Math.max(...zs) - Math.min(...zs),
+    0.01
+  );
+  const ratio = pExtent / sExtent;
+  const candidates = [
+    { name: 'm',  ratio: 1,       scale: 1 },
+    { name: 'ft', ratio: 3.2808,  scale: 0.3048 },
+    { name: 'in', ratio: 39.3701, scale: 0.0254 },
+    { name: 'mm', ratio: 1000,    scale: 0.001 },
+  ];
+  let best = candidates[0]; let bestDist = Infinity;
+  for (const c of candidates) {
+    const d = Math.abs(Math.log(ratio / c.ratio));
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  if (bestDist > 0.7) { state.unitScale = 1; state.detectedUnit = null; }
+  else { state.unitScale = best.scale; state.detectedUnit = best.name; }
+  updateUnitsLabel();
+}
+
+function updateUnitsLabel() {
+  const el = document.getElementById('vp-units');
+  el.innerHTML = state.detectedUnit
+    ? `<span class="label">Units</span> <span class="accent">${state.detectedUnit}</span>${state.unitMode === 'auto' ? ' <span class="mono">auto</span>' : ''}`
+    : '';
+}
+
+function applySceneScale() {
+  if (state.pointCloud) state.pointCloud.scale.setScalar(state.unitScale);
+}
+
+/* ============================================================
+   SCENE SPATIAL DATA — markers, grid, etc.
+   ============================================================ */
+function getSceneDiagonal() {
+  let d = 1;
+  if (state.pointCloud) {
+    const size = new THREE.Vector3();
+    state.pointCloud.geometry.boundingBox.getSize(size);
+    d = Math.max(d, size.length() * state.unitScale);
+  }
+  if (state.stations.length) {
+    const xs = state.stations.map(s => s.position.x);
+    const ys = state.stations.map(s => s.position.y);
+    const zs = state.stations.map(s => s.position.z);
+    const sx = Math.max(...xs) - Math.min(...xs);
+    const sy = Math.max(...ys) - Math.min(...ys);
+    const sz = Math.max(...zs) - Math.min(...zs);
+    d = Math.max(d, Math.hypot(sx, sy, sz));
+  }
+  return d;
+}
+
+function rebuildSpatial() {
+  // Markers
+  for (const m of markerMeshes.values()) {
+    markerGroup.remove(m);
+    m.material.dispose();
+  }
+  markerMeshes.clear();
+
+  if (state.stations.length) {
+    const diag = getSceneDiagonal();
+    const r = Math.max(0.05, diag * 0.005);
+    const geom = new THREE.SphereGeometry(r, 16, 12);
+
+    for (const station of state.stations) {
+      const isActive = station.id === state.activeStationId;
+      const mat = new THREE.MeshBasicMaterial({
+        color: isActive ? MARKER_COLOR_ACTIVE : MARKER_COLOR_IDLE,
+      });
+      const m = new THREE.Mesh(geom, mat);
+      m.position.copy(station.position);
+      m.userData.stationId = station.id;
+      m.visible = state.showMarkers;
+      if (isActive) m.scale.setScalar(1.4);
+      markerGroup.add(m);
+      markerMeshes.set(station.id, m);
+    }
+  }
+
+  // Grid
+  scene.remove(gridHelper);
+  gridHelper.geometry.dispose();
+  gridHelper.material.dispose();
+  const diag = getSceneDiagonal();
+  const gridSize = Math.max(20, Math.ceil(diag));
+  const gridDiv = Math.min(gridSize, 50);
+  gridHelper = new THREE.GridHelper(gridSize, gridDiv, 0x2a2a30, 0x1a1a1e);
+  gridHelper.visible = state.showGrid;
+  scene.add(gridHelper);
+}
+
+/* ============================================================
+   PANO SPHERES
+   ============================================================ */
+function getBaseQuaternion() {
+  const q = new THREE.Quaternion();
+  if (state.baseOrient === 'x90')  q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+  if (state.baseOrient === 'x-90') q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+  return q;
+}
+
+function buildSphereForStation(stationId) {
+  const station = state.stations.find(s => s.id === stationId);
+  const tex = state.panoTextures.get(stationId);
+  if (!station || !tex) return null;
+
+  const old = state.panoSpheres.get(stationId);
+  if (old) {
+    sphereGroup.remove(old);
+    old.geometry.dispose();
+    old.material.dispose();
+  }
+
+  const geom = new THREE.SphereGeometry(state.sphereRadius, 64, 48);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    side: THREE.BackSide,
+    transparent: true,
+    opacity: state.panoAlpha,
+    depthWrite: false,    // critical: lets clicks raycast through to point cloud
+  });
+  const sphere = new THREE.Mesh(geom, mat);
+  sphere.position.copy(station.position);
+
+  const baseQ = getBaseQuaternion();
+  const offsetEuler = new THREE.Euler(
+    THREE.MathUtils.degToRad(state.pitchOffset),
+    THREE.MathUtils.degToRad(state.seamOffset),
+    THREE.MathUtils.degToRad(state.rollOffset),
+    'YXZ'
+  );
+  const offsetQ = new THREE.Quaternion().setFromEuler(offsetEuler);
+  const finalQ = state.applyStationRot
+    ? new THREE.Quaternion().copy(station.quaternion).multiply(offsetQ).multiply(baseQ)
+    : new THREE.Quaternion().multiplyQuaternions(offsetQ, baseQ);
+  sphere.quaternion.copy(finalQ);
+
+  sphere.userData.stationId = stationId;
+  sphere.renderOrder = -1;
+  sphere.visible = (stationId === state.activeStationId);
+
+  sphereGroup.add(sphere);
+  state.panoSpheres.set(stationId, sphere);
+  return sphere;
+}
+
+function rebuildAllSpheres() {
+  // Only rebuild spheres for stations that already had one (or the active one)
+  const idsToRebuild = new Set(state.panoSpheres.keys());
+  if (state.activeStationId) idsToRebuild.add(state.activeStationId);
+  for (const id of idsToRebuild) {
+    if (state.panoTextures.has(id)) buildSphereForStation(id);
+  }
+}
+
+function updateSphereAlpha() {
+  for (const sphere of state.panoSpheres.values()) {
+    sphere.material.opacity = state.panoAlpha;
+    sphere.visible = sphere.userData.stationId === state.activeStationId && state.panoAlpha > 0.001;
+  }
+}
+
+/* ============================================================
+   STATION LIST UI
+   ============================================================ */
+function rebuildStationList() {
+  const list = document.getElementById('station-list');
+  list.innerHTML = '';
+  document.getElementById('station-count').textContent = state.stations.length || '—';
+  if (!state.stations.length) {
+    list.innerHTML = '<div class="empty-list">Load a stations JSON to populate.</div>';
+    return;
+  }
+  for (const station of state.stations) {
+    const hasPano = state.panoTextures.has(station.id);
+    const item = document.createElement('div');
+    item.className = 'station' + (hasPano ? ' has-pano' : ' disabled') +
+                     (station.id === state.activeStationId ? ' active' : '');
+    item.innerHTML = `
+      <span class="dot"></span>
+      <span class="name">${station.id}</span>
+      ${hasPano ? '' : '<span class="pos">no pano</span>'}
+    `;
+    if (hasPano) item.addEventListener('click', () => setActiveStation(station.id));
+    list.appendChild(item);
+  }
+}
+
+/* ============================================================
+   STATION ACTIVATION & PANO MODE
+   ============================================================ */
+function setActiveStation(stationId) {
+  const wasActive = state.activeStationId;
+  state.activeStationId = stationId;
+
+  // Build sphere if needed
+  if (stationId && state.panoTextures.has(stationId) && !state.panoSpheres.has(stationId)) {
+    buildSphereForStation(stationId);
+  }
+
+  // Update sphere visibility
+  for (const [id, sphere] of state.panoSpheres) {
+    sphere.visible = (id === stationId) && state.panoAlpha > 0.001;
+  }
+
+  // Marker color/scale
+  for (const [id, marker] of markerMeshes) {
+    const isActive = id === stationId;
+    marker.material.color.setHex(isActive ? MARKER_COLOR_ACTIVE : MARKER_COLOR_IDLE);
+    marker.scale.setScalar(isActive ? 1.4 : 1);
+  }
+
+  rebuildStationList();
+  updateModeUI();
+
+  // Camera move
+  if (stationId) {
+    const station = state.stations.find(s => s.id === stationId);
+    if (station) {
+      const worldPos = station.position.clone().applyMatrix4(coordRoot.matrixWorld);
+      // Animate to station position; aim at scanner's local +Y in world space
+      const fwd = new THREE.Vector3(0, 1, 0).applyQuaternion(station.quaternion);
+      const localTarget = station.position.clone().add(fwd);
+      const worldTarget = localTarget.applyMatrix4(coordRoot.matrixWorld);
+      camera.position.copy(worldPos);
+      controls.target.copy(worldTarget);
+      controls.update();
+    }
+  }
+}
+
+function updateModeUI() {
+  const inPano = state.activeStationId !== null;
+  document.getElementById('vp-mode-label').textContent = inPano ? 'Pano' : 'Free';
+  document.getElementById('vp-station-label').textContent = inPano ? `· ${state.activeStationId}` : '';
+
+  document.getElementById('exit-pano-btn').disabled = !inPano;
+  const stationsWithPanos = state.stations.filter(s => state.panoTextures.has(s.id));
+  const idx = stationsWithPanos.findIndex(s => s.id === state.activeStationId);
+  document.getElementById('prev-station-btn').disabled = idx <= 0;
+  document.getElementById('next-station-btn').disabled = idx === -1 || idx >= stationsWithPanos.length - 1;
+
+  // Show/hide alpha slider — only meaningful in pano mode
+  document.getElementById('alpha-slider').style.display = inPano ? 'flex' : 'none';
+  document.getElementById('dock-div-1').style.display = inPano ? 'block' : 'none';
+}
+
+function navStation(delta) {
+  const stationsWithPanos = state.stations.filter(s => state.panoTextures.has(s.id));
+  if (!stationsWithPanos.length) return;
+  let idx = stationsWithPanos.findIndex(s => s.id === state.activeStationId);
+  if (idx === -1) idx = 0;
+  else idx = Math.max(0, Math.min(stationsWithPanos.length - 1, idx + delta));
+  setActiveStation(stationsWithPanos[idx].id);
+}
+
+document.getElementById('exit-pano-btn').addEventListener('click', () => setActiveStation(null));
+document.getElementById('prev-station-btn').addEventListener('click', () => navStation(-1));
+document.getElementById('next-station-btn').addEventListener('click', () => navStation(1));
+
+/* ============================================================
+   FRAMING
+   ============================================================ */
+function frameAll() {
+  let center = new THREE.Vector3(); let radius = 5;
+  if (state.pointCloud) {
+    const box = state.pointCloud.geometry.boundingBox;
+    const c = new THREE.Vector3(); box.getCenter(c);
+    c.multiplyScalar(state.unitScale);
+    const size = new THREE.Vector3(); box.getSize(size);
+    radius = Math.max(radius, size.length() * 0.5 * state.unitScale);
+    center.copy(c);
+  } else if (state.stations.length) {
+    const xs = state.stations.map(s => s.position.x);
+    const ys = state.stations.map(s => s.position.y);
+    const zs = state.stations.map(s => s.position.z);
+    center.set(
+      (Math.min(...xs) + Math.max(...xs)) / 2,
+      (Math.min(...ys) + Math.max(...ys)) / 2,
+      (Math.min(...zs) + Math.max(...zs)) / 2
+    );
+    radius = Math.hypot(
+      Math.max(...xs) - Math.min(...xs),
+      Math.max(...ys) - Math.min(...ys),
+      Math.max(...zs) - Math.min(...zs)
+    ) * 0.5;
+  }
+  const worldCenter = center.clone().applyMatrix4(coordRoot.matrixWorld);
+  const dist = radius * 2.5;
+  camera.position.copy(worldCenter).add(new THREE.Vector3(dist, dist, dist));
+  controls.target.copy(worldCenter);
+  controls.update();
+}
+
+/* ============================================================
+   CLICK HANDLING — markers & measurements
+   ============================================================ */
+const raycaster = new THREE.Raycaster();
+raycaster.params.Points = { threshold: 0.05 };
+const pointer = new THREE.Vector2();
+
+function setPointer(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+renderer.domElement.addEventListener('click', (e) => {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+
+  // Adjust point threshold based on scene scale and active point size
+  const diag = getSceneDiagonal();
+  raycaster.params.Points.threshold = Math.max(0.02, diag * 0.001) * (state.pointSize / 1.5);
+
+  if (state.measuring) {
+    const hit = pickPointInScene();
+    if (hit) addMeasurePoint(hit);
+    return;
+  }
+
+  // Otherwise, marker pick
+  const markerHits = raycaster.intersectObjects([...markerMeshes.values()], false);
+  if (markerHits.length) {
+    const id = markerHits[0].object.userData.stationId;
+    if (state.panoTextures.has(id)) setActiveStation(id);
+  }
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  setPointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  if (state.measuring) {
+    renderer.domElement.style.cursor = 'crosshair';
+    return;
+  }
+  const markerHits = raycaster.intersectObjects([...markerMeshes.values()], false);
+  renderer.domElement.style.cursor = (markerHits.length && state.panoTextures.has(markerHits[0].object.userData.stationId)) ? 'pointer' : '';
+});
+
+/* ============================================================
+   MEASUREMENT
+   ============================================================ */
+function pickPointInScene() {
+  // Cast against the point cloud only — measurement makes sense on real points
+  if (!state.pointCloud) return null;
+  const hits = raycaster.intersectObject(state.pointCloud, false);
+  if (!hits.length) return null;
+  // Return the WORLD-space position of the picked point
+  return hits[0].point.clone();
+}
+
+function addMeasurePoint(worldPoint) {
+  if (!state.pendingPoint) {
+    state.pendingPoint = worldPoint;
+    return;
+  }
+  const a = state.pendingPoint;
+  const b = worldPoint;
+  state.pendingPoint = null;
+  const dist = a.distanceTo(b);
+
+  // Line in world space (so we don't have to undo coordRoot)
+  const lineGeom = new THREE.BufferGeometry().setFromPoints([a, b]);
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x4ec9ff, depthTest: false, depthWrite: false });
+  const line = new THREE.Line(lineGeom, lineMat);
+  line.renderOrder = 999;
+  scene.add(line);
+
+  // Endpoint dots
+  const dotGeom = new THREE.SphereGeometry(getSceneDiagonal() * 0.003, 12, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: 0x4ec9ff, depthTest: false });
+  const dotA = new THREE.Mesh(dotGeom, dotMat);
+  const dotB = new THREE.Mesh(dotGeom, dotMat);
+  dotA.position.copy(a);
+  dotB.position.copy(b);
+  dotA.renderOrder = 1000;
+  dotB.renderOrder = 1000;
+  scene.add(dotA);
+  scene.add(dotB);
+
+  // HTML label
+  const labelDiv = document.createElement('div');
+  labelDiv.style.cssText = `
+    position: absolute;
+    pointer-events: none;
+    background: rgba(78, 201, 255, 0.15);
+    border: 1px solid rgba(78, 201, 255, 0.4);
+    color: #4ec9ff;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    transform: translate(-50%, -50%);
+    backdrop-filter: blur(4px);
+  `;
+  labelsLayer.appendChild(labelDiv);
+
+  state.measurements.push({ a, b, dist, line, dotA, dotB, labelDiv });
+  rebuildMeasurementsList();
+}
+
+function clearAllMeasurements() {
+  for (const m of state.measurements) {
+    scene.remove(m.line); m.line.geometry.dispose(); m.line.material.dispose();
+    scene.remove(m.dotA); m.dotA.geometry.dispose(); // shared mat with dotB; dispose later
+    scene.remove(m.dotB);
+    m.labelDiv.remove();
+  }
+  state.measurements = [];
+  state.pendingPoint = null;
+  rebuildMeasurementsList();
+}
+
+function deleteMeasurement(index) {
+  const m = state.measurements[index];
+  if (!m) return;
+  scene.remove(m.line); m.line.geometry.dispose(); m.line.material.dispose();
+  scene.remove(m.dotA); scene.remove(m.dotB);
+  m.dotA.geometry.dispose();
+  m.labelDiv.remove();
+  state.measurements.splice(index, 1);
+  rebuildMeasurementsList();
+}
+
+function formatDistance(meters) {
+  if (state.detectedUnit === 'ft' || state.detectedUnit === 'in') {
+    const ft = meters * 3.2808;
+    if (ft < 1) return `${(ft * 12).toFixed(2)} in`;
+    return `${ft.toFixed(2)} ft`;
+  } else if (state.detectedUnit === 'mm') {
+    return `${(meters * 1000).toFixed(0)} mm`;
+  }
+  if (meters < 0.01) return `${(meters * 1000).toFixed(1)} mm`;
+  if (meters < 1) return `${(meters * 100).toFixed(1)} cm`;
+  return `${meters.toFixed(3)} m`;
+}
+
+function rebuildMeasurementsList() {
+  const list = document.getElementById('measurements');
+  document.getElementById('measurement-count').textContent = state.measurements.length;
+  if (!state.measurements.length) {
+    list.innerHTML = '<div class="empty-list">Press <span class="mono" style="color:var(--measure)">M</span> or click the ruler in the dock, then click two points in the scene.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  state.measurements.forEach((m, i) => {
+    const item = document.createElement('div');
+    item.className = 'measurement';
+    item.innerHTML = `
+      <div class="dist mono">${formatDistance(m.dist)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div class="meta">#${i + 1}</div>
+        <button class="delete" data-index="${i}">delete</button>
+      </div>
+    `;
+    item.querySelector('.delete').addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteMeasurement(i);
+    });
+    list.appendChild(item);
+  });
+}
+
+function setMeasuring(on) {
+  state.measuring = on;
+  state.pendingPoint = null;
+  document.getElementById('measure-btn').classList.toggle('measure-active', on);
+  vpContainer.classList.toggle('measuring', on);
+}
+
+document.getElementById('measure-btn').addEventListener('click', () => setMeasuring(!state.measuring));
+document.getElementById('clear-measure-btn').addEventListener('click', clearAllMeasurements);
+
+// Update measurement label positions every frame
+function updateMeasurementLabels() {
+  if (!state.measurements.length) return;
+  const w = renderer.domElement.clientWidth;
+  const h = renderer.domElement.clientHeight;
+  for (const m of state.measurements) {
+    const mid = m.a.clone().add(m.b).multiplyScalar(0.5);
+    const screen = mid.clone().project(camera);
+    const x = (screen.x * 0.5 + 0.5) * w;
+    const y = (-screen.y * 0.5 + 0.5) * h;
+    if (screen.z < -1 || screen.z > 1) {
+      m.labelDiv.style.display = 'none';
+    } else {
+      m.labelDiv.style.display = 'block';
+      m.labelDiv.style.left = x + 'px';
+      m.labelDiv.style.top = y + 'px';
+      m.labelDiv.textContent = formatDistance(m.dist);
+    }
+  }
+}
+
+/* ============================================================
+   SETTINGS WIRING
+   ============================================================ */
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPopover = document.getElementById('settings-popover');
+settingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsPopover.classList.toggle('show');
+  settingsBtn.classList.toggle('active');
+});
+document.addEventListener('click', (e) => {
+  if (!settingsPopover.contains(e.target) && e.target !== settingsBtn) {
+    settingsPopover.classList.remove('show');
+    settingsBtn.classList.remove('active');
+  }
+});
+
+function bindNumPair(rangeId, key, onChange) {
+  const slider = document.getElementById(rangeId);
+  const number = document.getElementById(rangeId + '-n');
+  function update(v) {
+    state[key] = parseFloat(v);
+    if (slider) slider.value = v;
+    if (number) number.value = v;
+    if (onChange) onChange();
+  }
+  if (slider) slider.addEventListener('input', () => update(slider.value));
+  if (number) number.addEventListener('input', () => update(number.value));
+}
+
+bindNumPair('seam-offset', 'seamOffset', rebuildAllSpheres);
+bindNumPair('pitch-offset', 'pitchOffset', rebuildAllSpheres);
+bindNumPair('roll-offset', 'rollOffset', rebuildAllSpheres);
+bindNumPair('sphere-radius', 'sphereRadius', rebuildAllSpheres);
+
+document.getElementById('base-orient').addEventListener('change', (e) => {
+  state.baseOrient = e.target.value; rebuildAllSpheres();
+});
+document.getElementById('apply-station-rot').addEventListener('change', (e) => {
+  state.applyStationRot = e.target.checked; rebuildAllSpheres();
+});
+document.getElementById('up-axis').addEventListener('change', (e) => {
+  state.upAxis = e.target.value; applyUpAxis(); frameAll();
+});
+document.getElementById('unit-mode').addEventListener('change', (e) => {
+  state.unitMode = e.target.value; detectAndApplyUnits(); applySceneScale(); frameAll();
+});
+document.getElementById('point-size').addEventListener('input', (e) => {
+  state.pointSize = parseFloat(e.target.value);
+  if (state.pointCloud) state.pointCloud.material.size = state.pointSize;
+});
+document.getElementById('show-markers').addEventListener('change', (e) => {
+  state.showMarkers = e.target.checked;
+  for (const m of markerMeshes.values()) m.visible = state.showMarkers;
+});
+document.getElementById('show-grid').addEventListener('change', (e) => {
+  state.showGrid = e.target.checked;
+  gridHelper.visible = state.showGrid;
+});
+
+// Alpha slider in dock
+const alphaInput = document.getElementById('alpha-input');
+const alphaValue = document.getElementById('alpha-value');
+alphaInput.addEventListener('input', () => {
+  state.panoAlpha = parseFloat(alphaInput.value);
+  alphaValue.textContent = `${Math.round(state.panoAlpha * 100)}%`;
+  updateSphereAlpha();
+});
+
+// Keyboard
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') navStation(-1);
+  else if (e.key === 'ArrowRight') navStation(1);
+  else if (e.key === 'Escape') {
+    if (state.measuring) setMeasuring(false);
+    else if (state.activeStationId) setActiveStation(null);
+  }
+  else if (e.key === 'm' || e.key === 'M') setMeasuring(!state.measuring);
+});
+
+function updateTopbarHint() {
+  const hint = document.getElementById('topbar-hint');
+  const hasCloud = !!state.pointCloud;
+  const hasStations = state.stations.length > 0;
+  const panoCount = state.panoTextures.size;
+  if (hasCloud && hasStations && panoCount > 0) hint.textContent = `${panoCount} panos · ${state.measurements.length} measurement${state.measurements.length === 1 ? '' : 's'}`;
+  else if (hasCloud && hasStations) hint.textContent = 'Add panos for full immersion';
+  else if (hasCloud) hint.textContent = 'Load stations JSON';
+  else if (hasStations) hint.textContent = 'Load PLY';
+  else hint.textContent = 'Load PLY + stations';
+}
+
+/* ============================================================
+   RENDER LOOP
+   ============================================================ */
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  updateMeasurementLabels();
+  renderer.render(scene, camera);
+}
+animate();
+updateModeUI();
+
+/* ============================================================
+   AUTO-LOAD
+   ============================================================ */
+async function autoLoad() {
+  if (CONFIG.PROJECT_NAME) {
+    const el = document.getElementById('project-name');
+    el.textContent = CONFIG.PROJECT_NAME;
+    el.style.display = '';
+  }
+  const tasks = [];
+  if (CONFIG.PLY_URL) tasks.push((async () => {
+    setLoadStatus('ply-btn', 'fetching…');
+    try {
+      const r = await fetch(CONFIG.PLY_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await loadPLYFromBuffer(await r.arrayBuffer(), CONFIG.PLY_URL.split('/').pop());
+    } catch (err) { console.error(err); setLoadStatus('ply-btn', `failed: ${err.message}`); }
+  })());
+  if (CONFIG.STATIONS_URL) tasks.push((async () => {
+    setLoadStatus('json-btn', 'fetching…');
+    try {
+      const r = await fetch(CONFIG.STATIONS_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await loadStationsFromText(await r.text(), CONFIG.STATIONS_URL.split('/').pop());
+    } catch (err) { console.error(err); setLoadStatus('json-btn', `failed: ${err.message}`); }
+  })());
+  await Promise.all(tasks);
+  if (CONFIG.PANO_FOLDER && state.stations.length) {
+    const folder = CONFIG.PANO_FOLDER.endsWith('/') ? CONFIG.PANO_FOLDER : CONFIG.PANO_FOLDER + '/';
+    setLoadStatus('pano-btn', `fetching ${state.stations.length}…`);
+    let matched = 0; let failed = 0;
+    for (const station of state.stations) {
+      try {
+        const tex = await loadTexture(folder + station.filename);
+        state.panoTextures.set(station.id, tex);
+        matched++;
+      } catch (err) { failed++; }
+    }
+    rebuildStationList();
+    setLoadStatus('pano-btn', `${matched}/${state.stations.length}` + (failed ? ` (${failed} failed)` : ''), matched > 0);
+    updateTopbarHint();
+  }
+}
+autoLoad();
+</script>
+</body>
+</html>
