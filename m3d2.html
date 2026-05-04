@@ -1,0 +1,2544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Point Cloud Measure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0c0d;
+    --panel: #16161a;
+    --panel-2: #1e1e23;
+    --border: #2a2a2f;
+    --border-strong: #3a3a40;
+    --text: #e4e4e6;
+    --text-dim: #888890;
+    --text-faint: #56565c;
+
+    --accent: #ff7b29;
+    --accent-soft: rgba(255, 123, 41, 0.12);
+    --accent-line: rgba(255, 123, 41, 0.4);
+
+    --measure: #6ed4ff;
+    --measure-soft: rgba(110, 212, 255, 0.15);
+    --measure-line: rgba(110, 212, 255, 0.5);
+
+    --surface-h: #79e87e;  /* horizontal (floor/ceiling) */
+    --surface-v: #ffd166;  /* vertical (wall) */
+    --surface-s: #c084fc;  /* sloped */
+    --surface-none: #ff5577;
+
+    --good: #5eb95e;
+    --warn: #f0ad4e;
+    --bad: #ff5577;
+
+    --bar-h: 40px;
+    --rail-w: 280px;
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%; overflow: hidden;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  #app { display: grid; grid-template-rows: var(--bar-h) 1fr; height: 100vh; }
+
+  /* TOPBAR */
+  #topbar {
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    gap: 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  #topbar .title { font-weight: 600; font-size: 13px; letter-spacing: -0.01em; }
+  #topbar .title .accent { color: var(--accent); margin-right: 4px; }
+  #topbar .project {
+    color: var(--text-dim); font-weight: 500; font-size: 12px;
+    margin-left: 8px; padding-left: 8px;
+    border-left: 1px solid var(--border);
+  }
+  #topbar .spacer { flex: 1; }
+  #topbar .hint {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+  }
+
+  #main {
+    display: grid;
+    grid-template-columns: var(--rail-w) 1fr;
+    overflow: hidden;
+  }
+
+  /* RAIL */
+  #rail {
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .rail-section { border-bottom: 1px solid var(--border); display: flex; flex-direction: column; }
+  .rail-section.flex { flex: 1; min-height: 0; }
+  .rail-header {
+    padding: 9px 14px;
+    display: flex; justify-content: space-between; align-items: center;
+    flex-shrink: 0;
+  }
+  .rail-header .label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-dim); font-weight: 600;
+  }
+  .rail-header .meta {
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+  }
+
+  /* Measurements list */
+  #measure-list {
+    overflow-y: auto;
+    padding: 0 0 8px;
+  }
+  .meas {
+    padding: 9px 14px 9px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: default;
+    position: relative;
+  }
+  .meas:hover { background: var(--panel-2); }
+  .meas.selected { background: var(--measure-soft); }
+  .meas .header-row {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 3px;
+  }
+  .meas .num {
+    font-family: var(--font-mono); font-size: 9px;
+    color: var(--text-faint);
+    width: 16px;
+  }
+  .meas .label-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 12px;
+    padding: 1px 4px;
+    margin-left: -4px;
+    border-radius: 2px;
+    font-weight: 500;
+  }
+  .meas .label-input:focus { outline: none; background: var(--bg); }
+  .meas .label-input.placeholder { color: var(--text-faint); font-style: italic; }
+  .meas .actions {
+    display: flex; gap: 2px;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .meas:hover .actions { opacity: 1; }
+  .meas .icon-mini {
+    background: none; border: none;
+    color: var(--text-faint); cursor: pointer;
+    padding: 2px; border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .meas .icon-mini:hover { color: var(--text); background: var(--panel-2); }
+  .meas .icon-mini.danger:hover { color: var(--bad); background: rgba(255, 85, 119, 0.1); }
+  .meas .dist {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--measure);
+    font-weight: 500;
+    margin-left: 22px;
+  }
+  .meas .meta-line {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-faint);
+    margin-left: 22px;
+    margin-top: 2px;
+  }
+  .empty-list {
+    padding: 16px 14px;
+    color: var(--text-faint);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .empty-list .kbd {
+    font-family: var(--font-mono);
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 10px;
+    color: var(--text);
+  }
+
+  /* Stations sub-list */
+  #stations-list { max-height: 180px; overflow-y: auto; }
+  .station-row {
+    padding: 6px 14px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px;
+  }
+  .station-row:hover { background: var(--panel-2); }
+  .station-row.has-pano { color: var(--text); }
+  .station-row.disabled { color: var(--text-faint); cursor: default; }
+  .station-row .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-faint);
+  }
+  .station-row.has-pano .dot { background: var(--accent); }
+  .station-row .name { flex: 1; }
+
+  /* Load section */
+  #load-section { padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .file-btn {
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+    font-size: 11px;
+    transition: all 0.1s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .file-btn:hover { background: var(--border); border-color: var(--accent-line); }
+  .file-btn.loaded { border-color: var(--good); }
+  .file-btn .ico { opacity: 0.7; }
+  .file-btn .status {
+    margin-left: auto; font-size: 10px; color: var(--text-faint);
+    font-family: var(--font-mono);
+    max-width: 130px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .file-btn.loaded .status { color: var(--good); }
+  .file-input { display: none; }
+
+  /* VIEWPORT */
+  #viewport-container { position: relative; overflow: hidden; background: #050506; }
+  #viewport-container canvas { display: block; outline: none; }
+  #viewport-container.measuring canvas { cursor: none; }
+
+  .vp-overlay {
+    position: absolute; top: 12px;
+    padding: 5px 10px;
+    background: rgba(20, 20, 22, 0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    pointer-events: none;
+    color: var(--text-dim);
+  }
+  .vp-overlay.left { left: 12px; }
+  .vp-overlay.right { right: 12px; }
+  .vp-overlay .label {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10px;
+    margin-right: 6px;
+  }
+  .vp-overlay .accent { color: var(--accent); font-weight: 600; font-family: var(--font-mono); }
+
+  /* Surface indicator (top-right when measuring) */
+  #surface-info {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    padding: 6px 12px;
+    background: rgba(20, 20, 22, 0.85);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    pointer-events: none;
+    display: none;
+    align-items: center;
+    gap: 8px;
+  }
+  #surface-info.show { display: flex; }
+  #surface-info .swatch {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+  #surface-info .swatch.h { background: var(--surface-h); }
+  #surface-info .swatch.v { background: var(--surface-v); }
+  #surface-info .swatch.s { background: var(--surface-s); }
+  #surface-info .swatch.none { background: var(--surface-none); }
+  #surface-info .text { color: var(--text); }
+
+  /* DOCK */
+  #dock {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(20, 20, 22, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 6px;
+    z-index: 50;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .dock-divider { width: 1px; height: 22px; background: var(--border); margin: 0 2px; }
+  .dock-btn {
+    padding: 6px 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 11px;
+    display: flex; align-items: center; gap: 5px;
+    font-weight: 500;
+    transition: all 0.1s;
+    white-space: nowrap;
+  }
+  .dock-btn:hover { background: var(--panel-2); color: var(--text); }
+  .dock-btn:disabled { opacity: 0.3; cursor: default; }
+  .dock-btn:disabled:hover { background: transparent; color: var(--text-dim); }
+  .dock-btn.active { background: var(--measure-soft); color: var(--measure); }
+  .dock-btn.constraint-btn { padding: 6px 8px; font-family: var(--font-mono); }
+  .dock-btn.constraint-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+  }
+  .constraint-group { display: flex; gap: 1px; align-items: center; }
+  .dock-btn .kbd {
+    font-family: var(--font-mono); font-size: 9px; opacity: 0.5;
+    margin-left: 3px;
+    border: 1px solid var(--border);
+    padding: 0px 4px;
+    border-radius: 2px;
+  }
+
+  /* Empty state */
+  .vp-empty {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-faint); text-align: center; padding: 40px;
+    pointer-events: none;
+  }
+  .vp-empty .heading { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; font-weight: 500; }
+  .vp-empty .body { font-size: 11px; line-height: 1.5; max-width: 280px; }
+
+  /* Pano reference panel */
+  #pano-panel {
+    position: absolute;
+    top: 56px;
+    right: 14px;
+    width: 320px;
+    background: rgba(20, 20, 22, 0.92);
+    backdrop-filter: blur(14px);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    overflow: hidden;
+    z-index: 40;
+    display: none;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+  }
+  #pano-panel.show { display: block; }
+  #pano-panel .pano-header {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel-2);
+  }
+  #pano-panel .pano-header .label {
+    flex: 1;
+    font-size: 11px; color: var(--text-dim);
+  }
+  #pano-panel .pano-header .name { color: var(--accent); font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
+  #pano-panel .pano-header .close {
+    background: none; border: none; color: var(--text-faint);
+    cursor: pointer; padding: 2px;
+    display: flex; align-items: center;
+  }
+  #pano-panel .pano-header .close:hover { color: var(--text); }
+  #pano-canvas-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 0.75;
+    background: #000;
+    overflow: hidden;
+  }
+  #pano-canvas-wrap canvas { width: 100%; height: 100%; display: block; }
+  #pano-empty {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-faint); font-size: 11px;
+  }
+
+  /* Settings popover */
+  #settings-popover {
+    position: absolute; top: 50px; right: 14px;
+    width: 260px;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+    z-index: 200;
+    display: none;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+  #settings-popover.show { display: block; }
+  #settings-popover .section + .section {
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  #settings-popover .section-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim); margin-bottom: 8px; font-weight: 600;
+  }
+  .field {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px; font-size: 11px;
+  }
+  .field label { flex: 1; color: var(--text-dim); }
+  .field input[type="range"] { flex: 1.4; accent-color: var(--accent); height: 3px; }
+  .field input[type="number"] {
+    width: 56px;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 3px 6px; border-radius: 3px;
+    font-size: 11px; font-family: var(--font-mono);
+  }
+  .field select {
+    flex: 1.4;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 3px 6px; border-radius: 3px; font-size: 11px;
+  }
+  .field input[type="checkbox"] { accent-color: var(--accent); }
+
+  /* Unit cycle button */
+  .unit-cycle {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    background: var(--panel-2);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text);
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.1s;
+  }
+  .unit-cycle:hover { background: var(--border); border-color: var(--accent-line); }
+  .unit-cycle .label { color: var(--text-faint); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .unit-cycle .value { color: var(--accent); font-weight: 600; }
+
+  .icon-btn {
+    width: 26px; height: 26px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover {
+    background: var(--panel-2);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .icon-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent-line);
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <div id="topbar">
+    <div class="title"><span class="accent">⊞</span>Point Cloud Measure<span class="project" id="project-name" style="display:none"></span></div>
+    <div class="spacer"></div>
+    <div class="hint" id="topbar-hint">Load a PLY to begin</div>
+    <button class="icon-btn" id="settings-btn" title="Settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+
+  <div id="main">
+
+    <div id="rail">
+      <div class="rail-section flex">
+        <div class="rail-header">
+          <div class="label">Measurements</div>
+          <div class="meta" id="meas-count">0</div>
+        </div>
+        <div id="measure-list">
+          <div class="empty-list">
+            Press <span class="kbd">M</span> to start measuring, then click two points.<br><br>
+            <span class="kbd">C</span> toggles continuous mode for multi-segment paths (<span class="kbd">Enter</span> to finish).<br><br>
+            <span class="kbd">2</span><span class="kbd">3</span><span class="kbd">4</span> lock to X/Y/Z. <span class="kbd">5</span> horizontal, <span class="kbd">6</span> vertical, <span class="kbd">1</span> free.
+          </div>
+        </div>
+      </div>
+
+      <div class="rail-section" id="stations-section" style="display:none;">
+        <div class="rail-header">
+          <div class="label">Stations</div>
+          <div class="meta" id="stations-count">—</div>
+        </div>
+        <div id="stations-list"></div>
+      </div>
+
+      <div class="rail-section" style="flex:0 0 auto;">
+        <div id="load-section">
+          <input type="file" id="ply-input" accept=".ply" class="file-input">
+          <button class="file-btn" data-target="ply-input" id="ply-btn">
+            <span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
+            PLY
+            <span class="status">empty</span>
+          </button>
+          <input type="file" id="json-input" accept=".json" class="file-input">
+          <button class="file-btn" data-target="json-input" id="json-btn">
+            <span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>
+            Stations
+            <span class="status">optional</span>
+          </button>
+          <input type="file" id="pano-input" accept="image/*" multiple class="file-input">
+          <button class="file-btn" data-target="pano-input" id="pano-btn">
+            <span class="ico"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg></span>
+            Panos
+            <span class="status">optional</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="viewport-container">
+      <div class="vp-overlay left">
+        <span class="label">Mode</span>
+        <span class="accent" id="vp-mode-label">Navigate</span>
+      </div>
+
+      <div id="surface-info">
+        <div class="swatch" id="surface-swatch"></div>
+        <div class="text" id="surface-text">—</div>
+      </div>
+
+      <div class="vp-empty" id="vp-empty">
+        <div>
+          <div class="heading">No data loaded</div>
+          <div class="body">Load a PLY point cloud to begin measuring.<br>Stations and panos are optional and only used for reference.</div>
+        </div>
+      </div>
+
+      <!-- Pano reference panel -->
+      <div id="pano-panel">
+        <div class="pano-header">
+          <div class="label">Pano · <span class="name" id="pano-name">—</span></div>
+          <button class="pano-mini-btn" id="pano-follow-btn" title="Track cloud view direction" style="border:none;background:transparent;color:var(--accent);cursor:pointer;padding:2px 6px;border-radius:3px;font-size:10px;font-family:var(--font-mono);">
+            <span id="pano-follow-state">FOLLOW</span>
+          </button>
+          <button class="close" id="pano-close" title="Close (P)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div id="pano-canvas-wrap">
+          <div id="pano-empty">No pano loaded for this station</div>
+        </div>
+      </div>
+
+      <div id="dock">
+        <button class="dock-btn" id="measure-btn" title="Toggle measure (M)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.3 8.7L8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="M7 15l3 3"/><path d="M11 11l3 3"/><path d="M15 7l3 3"/></svg>
+          Measure
+          <span class="kbd">M</span>
+        </button>
+        <button class="dock-btn" id="continuous-btn" title="Continuous (multi-point) measurement (C)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 11 13 15 21 7"/></svg>
+          <span class="kbd">C</span>
+        </button>
+
+        <div class="dock-divider"></div>
+
+        <div class="constraint-group" id="constraint-group">
+          <button class="dock-btn constraint-btn active" data-constraint="free" title="Free (1)">
+            Free<span class="kbd">1</span>
+          </button>
+          <button class="dock-btn constraint-btn" data-constraint="x" title="Lock X axis (2)">
+            <span style="color:#ff5577;font-weight:600;">X</span><span class="kbd">2</span>
+          </button>
+          <button class="dock-btn constraint-btn" data-constraint="y" title="Lock Y axis (3)">
+            <span style="color:#79e87e;font-weight:600;">Y</span><span class="kbd">3</span>
+          </button>
+          <button class="dock-btn constraint-btn" data-constraint="z" title="Lock Z axis (4)">
+            <span style="color:#6ed4ff;font-weight:600;">Z</span><span class="kbd">4</span>
+          </button>
+          <button class="dock-btn constraint-btn" data-constraint="horizontal" title="Lock horizontal (5)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/></svg>
+            <span class="kbd">5</span>
+          </button>
+          <button class="dock-btn constraint-btn" data-constraint="vertical" title="Lock vertical (6)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            <span class="kbd">6</span>
+          </button>
+        </div>
+
+        <div class="dock-divider"></div>
+
+        <div class="unit-cycle" id="unit-cycle" title="Cycle units (U)">
+          <span class="label">Units</span>
+          <span class="value" id="unit-label">m</span>
+        </div>
+
+        <div class="dock-divider"></div>
+
+        <button class="dock-btn" id="pano-toggle-btn" title="Toggle pano panel (P)" style="display:none;">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg>
+          Pano
+          <span class="kbd">P</span>
+        </button>
+
+        <button class="dock-btn" id="frame-btn" title="Frame all (F)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h6M3 3v6M21 3h-6M21 3v6M3 21h6M3 21v-6M21 21h-6M21 21v-6"/></svg>
+          Frame
+          <span class="kbd">F</span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="settings-popover">
+    <div class="section">
+      <div class="section-label">Coordinate System</div>
+      <div class="field">
+        <label>Up axis</label>
+        <select id="up-axis">
+          <option value="z" selected>Z-up</option>
+          <option value="y">Y-up</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Cloud units</label>
+        <select id="unit-mode">
+          <option value="auto" selected>Auto-detect</option>
+          <option value="m">Meters</option>
+          <option value="ft">Feet</option>
+          <option value="in">Inches</option>
+          <option value="mm">Millimeters</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Surface Snap</div>
+      <div class="field">
+        <label>Surface snap</label>
+        <input type="checkbox" id="snap-enabled">
+      </div>
+      <div class="field">
+        <label>Neighbor radius</label>
+        <input type="range" id="snap-radius" min="0.02" max="2" step="0.01" value="0.15">
+        <input type="number" id="snap-radius-n" value="0.15" step="0.01">
+      </div>
+      <div class="field">
+        <label>Min planarity</label>
+        <input type="range" id="snap-planarity" min="0" max="1" step="0.01" value="0.6">
+        <input type="number" id="snap-planarity-n" value="0.6" step="0.05">
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Display</div>
+      <div class="field">
+        <label>Point size</label>
+        <input type="range" id="point-size" min="0.5" max="6" step="0.1" value="1.5">
+      </div>
+      <div class="field">
+        <label>Show grid</label>
+        <input type="checkbox" id="show-grid" checked>
+      </div>
+      <div class="field">
+        <label>Show stations</label>
+        <input type="checkbox" id="show-stations" checked>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+/* ============================================================
+   PROJECT CONFIG
+   ============================================================ */
+const CONFIG = {
+  PLY_URL:      null,
+  STATIONS_URL: null,
+  PANO_FOLDER:  null,
+  PROJECT_NAME: null,
+  UNIT_MODE:    'auto',
+  UP_AXIS:      'z',
+};
+
+/* ============================================================
+   STATE
+   ============================================================ */
+const state = {
+  pointCloud: null,
+  stations: [],
+  panoTextures: new Map(),
+  activeStationId: null,
+  unitScale: 1,
+  unitMode: CONFIG.UNIT_MODE,
+  detectedUnit: null,
+  upAxis: CONFIG.UP_AXIS,
+  pointSize: 1.5,
+  showGrid: true,
+  showStations: true,
+
+  measuring: false,
+  pendingPath: [],            // current in-progress polyline (world points)
+  measurements: [],
+  selectedMeasureId: null,
+
+  // Surface snap
+  snapEnabled: false,
+  snapRadius: 0.15,
+  snapPlanarity: 0.6,
+  hoverPoint: null,
+  hoverNormal: null,
+  hoverPlanarity: 0,
+  hoverSurfaceType: 'none',           // 'h' | 'v' | 's' | 'none'
+  constrainedHoverPoint: null,
+
+  // Units / display format
+  // 'm' | 'ft' | 'ftin' | 'ftin-frac'
+  displayUnit: 'm',
+  fractionDenom: 16,
+
+  // Spatial index (for fast neighbor lookup)
+  spatialGrid: null,
+
+  // Pano panel
+  panoOpen: false,
+  panoFollowEnabled: true,    // pano view tracks cloud view direction
+  panoYawOffsetDeg: 0,         // user-calibrated offset (per session) so pano aligns with cloud directions
+
+  // Endpoint editing — when set, we're dragging an endpoint
+  editingEndpoint: null,       // { measId, pointIdx } | null
+
+  // Measurement constraint
+  constraint: 'free',          // 'free' | 'x' | 'y' | 'z' | 'horizontal' | 'vertical'
+
+  // Measurement mode: simple two-point (default) vs continuous multi-segment
+  continuousMode: false,
+};
+
+let measId = 1;
+
+/* ============================================================
+   THREE.JS
+   ============================================================ */
+const vpContainer = document.getElementById('viewport-container');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+vpContainer.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050506);
+
+const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 10000);
+camera.position.set(10, 10, 10);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+const coordRoot = new THREE.Group();
+scene.add(coordRoot);
+
+let gridHelper = new THREE.GridHelper(20, 20, 0x2a2a30, 0x1a1a1e);
+scene.add(gridHelper);
+
+const stationGroup = new THREE.Group();
+const measureGroup = new THREE.Group();
+coordRoot.add(stationGroup);
+scene.add(measureGroup); // world space, not coord-rotated
+
+const stationMarkers = new Map(); // id -> Mesh
+
+// Custom snap cursor: a disc that orients to the surface normal
+const cursorDiscGeom = new THREE.CircleGeometry(1, 32);
+const cursorDiscMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.18,
+  side: THREE.DoubleSide,
+  depthTest: false,
+  depthWrite: false,
+});
+const cursorDisc = new THREE.Mesh(cursorDiscGeom, cursorDiscMat);
+cursorDisc.renderOrder = 9999;
+cursorDisc.visible = false;
+scene.add(cursorDisc);
+
+const cursorRingGeom = new THREE.RingGeometry(0.92, 1.0, 48);
+const cursorRingMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 1.0,
+  side: THREE.DoubleSide,
+  depthTest: false,
+  depthWrite: false,
+});
+const cursorRing = new THREE.Mesh(cursorRingGeom, cursorRingMat);
+cursorRing.renderOrder = 10000;
+cursorRing.visible = false;
+scene.add(cursorRing);
+
+// Center dot — always visible while measuring, gives precise focus regardless of disc state
+const cursorDotGeom = new THREE.SphereGeometry(1, 12, 8);
+const cursorDotMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  depthTest: false,
+  transparent: true,
+  opacity: 1.0,
+});
+const cursorDot = new THREE.Mesh(cursorDotGeom, cursorDotMat);
+cursorDot.renderOrder = 10001;
+cursorDot.visible = false;
+scene.add(cursorDot);
+
+// Dirty flag system: only re-run the expensive snap when something has changed
+const cursorDirty = { pointer: true, camera: true };
+let lastCursorRunMs = 0;
+const cursorMinIntervalMs = 16; // ~60Hz cap on snap work
+
+// Pending-path preview line (current in-progress measurement)
+const pendingLineGeom = new THREE.BufferGeometry();
+pendingLineGeom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(3 * 1024), 3));
+const pendingLineMat = new THREE.LineBasicMaterial({
+  color: 0x6ed4ff, depthTest: false, depthWrite: false, transparent: true, opacity: 0.85,
+});
+const pendingLine = new THREE.Line(pendingLineGeom, pendingLineMat);
+pendingLine.renderOrder = 9998;
+pendingLine.frustumCulled = false;
+scene.add(pendingLine);
+
+// HTML labels overlay
+const labelsLayer = document.createElement('div');
+labelsLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
+vpContainer.appendChild(labelsLayer);
+
+// Live distance label that follows the rubber-band cursor while measuring
+const liveLabel = document.createElement('div');
+liveLabel.style.cssText = `
+  position: absolute;
+  pointer-events: none;
+  background: rgba(110, 212, 255, 0.2);
+  border: 1px solid rgba(110, 212, 255, 0.7);
+  color: #6ed4ff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  transform: translate(-50%, calc(-50% - 24px));
+  backdrop-filter: blur(4px);
+  font-weight: 600;
+  display: none;
+`;
+labelsLayer.appendChild(liveLabel);
+
+function applyUpAxis() {
+  if (state.upAxis === 'z') coordRoot.rotation.set(-Math.PI / 2, 0, 0);
+  else coordRoot.rotation.set(0, 0, 0);
+}
+applyUpAxis();
+
+function resize() {
+  const w = vpContainer.clientWidth, h = vpContainer.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h || 1;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+new ResizeObserver(resize).observe(vpContainer);
+resize();
+
+/* ============================================================
+   SPATIAL GRID — for fast neighbor lookup
+   ============================================================
+   Uniform 3D voxel grid. Cell size ~ 2× snap radius. Stores
+   indices into the position buffer. Built once on PLY load.
+*/
+class SpatialGrid {
+  constructor(positions, scale = 1) {
+    this.positions = positions; // Float32Array, length = n*3
+    this.scale = scale;
+    this.cellSize = 0.3 / scale;       // initial guess; rebuilt as needed
+    this.cells = new Map();            // hash -> [indices]
+    this.bbox = new THREE.Box3();
+    this.pointCount = positions.length / 3;
+
+    // compute bbox (in raw point space, no scale)
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (let i = 0; i < positions.length; i += 3) {
+      const x = positions[i], y = positions[i+1], z = positions[i+2];
+      if (x < min.x) min.x = x;
+      if (y < min.y) min.y = y;
+      if (z < min.z) min.z = z;
+      if (x > max.x) max.x = x;
+      if (y > max.y) max.y = y;
+      if (z > max.z) max.z = z;
+    }
+    this.bbox.set(min, max);
+
+    // Determine a good cell size from average spacing
+    // Heuristic: bbox diagonal / cube_root(point_count) gives mean spacing
+    const diag = min.distanceTo(max);
+    const meanSpacing = diag / Math.cbrt(this.pointCount);
+    this.cellSize = Math.max(meanSpacing * 4, 0.05 / scale);
+
+    this.invCell = 1.0 / this.cellSize;
+
+    // bin points
+    for (let i = 0; i < positions.length; i += 3) {
+      const cx = Math.floor(positions[i] * this.invCell);
+      const cy = Math.floor(positions[i+1] * this.invCell);
+      const cz = Math.floor(positions[i+2] * this.invCell);
+      const key = `${cx},${cy},${cz}`;
+      let arr = this.cells.get(key);
+      if (!arr) { arr = []; this.cells.set(key, arr); }
+      arr.push(i / 3);
+    }
+  }
+
+  // returns array of point indices within radius of world-space point p
+  // (p is in coord-root world space; we transform back to raw cloud space)
+  queryRadius(pRawSpace, radius) {
+    const radCells = Math.ceil(radius * this.invCell);
+    const cx = Math.floor(pRawSpace.x * this.invCell);
+    const cy = Math.floor(pRawSpace.y * this.invCell);
+    const cz = Math.floor(pRawSpace.z * this.invCell);
+    const r2 = radius * radius;
+    const result = [];
+    const pos = this.positions;
+    for (let ix = cx - radCells; ix <= cx + radCells; ix++) {
+      for (let iy = cy - radCells; iy <= cy + radCells; iy++) {
+        for (let iz = cz - radCells; iz <= cz + radCells; iz++) {
+          const arr = this.cells.get(`${ix},${iy},${iz}`);
+          if (!arr) continue;
+          for (const idx of arr) {
+            const dx = pos[idx*3] - pRawSpace.x;
+            const dy = pos[idx*3+1] - pRawSpace.y;
+            const dz = pos[idx*3+2] - pRawSpace.z;
+            if (dx*dx + dy*dy + dz*dz <= r2) result.push(idx);
+          }
+        }
+      }
+    }
+    return result;
+  }
+}
+
+/* ============================================================
+   PCA PLANE FIT
+   ============================================================
+   Given indices into the position buffer, compute centroid and
+   the eigenvector of the covariance matrix corresponding to the
+   smallest eigenvalue (= surface normal). Also return a planarity
+   score: (λ_mid - λ_min) / λ_max — close to 1 means well-defined plane.
+*/
+function fitPlane(grid, indices) {
+  const pos = grid.positions;
+  const n = indices.length;
+  if (n < 8) return null;
+
+  let cx = 0, cy = 0, cz = 0;
+  for (const i of indices) {
+    cx += pos[i*3]; cy += pos[i*3+1]; cz += pos[i*3+2];
+  }
+  cx /= n; cy /= n; cz /= n;
+
+  // covariance matrix (symmetric 3x3)
+  let xx = 0, yy = 0, zz = 0, xy = 0, xz = 0, yz = 0;
+  for (const i of indices) {
+    const dx = pos[i*3] - cx;
+    const dy = pos[i*3+1] - cy;
+    const dz = pos[i*3+2] - cz;
+    xx += dx*dx; yy += dy*dy; zz += dz*dz;
+    xy += dx*dy; xz += dx*dz; yz += dy*dz;
+  }
+  xx /= n; yy /= n; zz /= n; xy /= n; xz /= n; yz /= n;
+
+  // 3x3 symmetric eigendecomposition via Jacobi rotations (small fixed iters)
+  const m = [
+    [xx, xy, xz],
+    [xy, yy, yz],
+    [xz, yz, zz],
+  ];
+  const v = [[1,0,0],[0,1,0],[0,0,1]];
+  for (let iter = 0; iter < 24; iter++) {
+    // find largest off-diagonal
+    let p = 0, q = 1, max = Math.abs(m[0][1]);
+    if (Math.abs(m[0][2]) > max) { p = 0; q = 2; max = Math.abs(m[0][2]); }
+    if (Math.abs(m[1][2]) > max) { p = 1; q = 2; max = Math.abs(m[1][2]); }
+    if (max < 1e-12) break;
+
+    const theta = (m[q][q] - m[p][p]) / (2 * m[p][q]);
+    const t = (theta >= 0 ? 1 : -1) / (Math.abs(theta) + Math.sqrt(theta*theta + 1));
+    const c = 1 / Math.sqrt(1 + t*t);
+    const s = t * c;
+
+    const mpp = m[p][p], mqq = m[q][q], mpq = m[p][q];
+    m[p][p] = mpp - t * mpq;
+    m[q][q] = mqq + t * mpq;
+    m[p][q] = m[q][p] = 0;
+
+    for (let i = 0; i < 3; i++) {
+      if (i !== p && i !== q) {
+        const mip = m[i][p], miq = m[i][q];
+        m[i][p] = m[p][i] = c * mip - s * miq;
+        m[i][q] = m[q][i] = s * mip + c * miq;
+      }
+    }
+    for (let i = 0; i < 3; i++) {
+      const vip = v[i][p], viq = v[i][q];
+      v[i][p] = c * vip - s * viq;
+      v[i][q] = s * vip + c * viq;
+    }
+  }
+  // eigenvalues on diagonal, eigenvectors in columns of v
+  const evals = [m[0][0], m[1][1], m[2][2]];
+  // sort ascending
+  const idxOrder = [0, 1, 2].sort((a, b) => evals[a] - evals[b]);
+  const min = evals[idxOrder[0]];
+  const mid = evals[idxOrder[1]];
+  const max = evals[idxOrder[2]];
+
+  // normal = eigenvector of smallest eigenvalue
+  const normal = new THREE.Vector3(v[0][idxOrder[0]], v[1][idxOrder[0]], v[2][idxOrder[0]]);
+  // planarity: how well-defined is the plane vs a sphere/line
+  // (mid - min) / max → close to 1 means much spread along plane, little perpendicular
+  const planarity = max > 1e-12 ? (mid - min) / max : 0;
+  return {
+    centroid: new THREE.Vector3(cx, cy, cz),
+    normal,
+    planarity,
+  };
+}
+
+/* ============================================================
+   FILE LOADING
+   ============================================================ */
+document.querySelectorAll('.file-btn').forEach(btn => {
+  btn.addEventListener('click', () => document.getElementById(btn.dataset.target).click());
+});
+
+function setLoadStatus(btnId, text, loaded = false) {
+  const btn = document.getElementById(btnId);
+  btn.querySelector('.status').textContent = text;
+  btn.classList.toggle('loaded', loaded);
+}
+
+async function loadPLYFromBuffer(buffer, displayName) {
+  const geom = new PLYLoader().parse(buffer);
+  geom.computeBoundingBox();
+
+  if (state.pointCloud) {
+    coordRoot.remove(state.pointCloud);
+    state.pointCloud.geometry.dispose();
+    state.pointCloud.material.dispose();
+  }
+
+  const hasColor = geom.hasAttribute('color');
+  const material = new THREE.PointsMaterial({
+    size: state.pointSize,
+    vertexColors: hasColor,
+    color: hasColor ? 0xffffff : 0xcccccc,
+    sizeAttenuation: false,
+  });
+  state.pointCloud = new THREE.Points(geom, material);
+  coordRoot.add(state.pointCloud);
+
+  // Build spatial grid for snap queries
+  setLoadStatus('ply-btn', 'indexing…');
+  await new Promise(r => requestAnimationFrame(r)); // let UI update
+  const positions = geom.attributes.position.array;
+  state.spatialGrid = new SpatialGrid(positions);
+
+  detectAndApplyUnits();
+  applySceneScale();
+  rebuildSpatial();
+  // tweak default snap radius based on detected scale
+  updateDefaultSnapRadius();
+  frameAll();
+
+  document.getElementById('vp-empty').style.display = 'none';
+  setLoadStatus('ply-btn', `${displayName} (${(positions.length / 3 / 1000).toFixed(0)}k pts)`, true);
+  updateTopbarHint();
+}
+
+function updateDefaultSnapRadius() {
+  // After PLY loads, set a sensible snap radius if user hasn't touched it
+  // ~0.5% of scene diagonal in world units
+  const diag = getSceneDiagonal();
+  const r = Math.max(0.05, Math.min(2, diag * 0.005));
+  state.snapRadius = r;
+  document.getElementById('snap-radius').value = r;
+  document.getElementById('snap-radius-n').value = r.toFixed(2);
+}
+
+async function loadStationsFromText(text, displayName) {
+  const data = JSON.parse(text);
+  const arr = Array.isArray(data) ? data : (data.stations || data.locations || []);
+  if (!arr.length) throw new Error('no stations in file');
+
+  for (const m of stationMarkers.values()) {
+    stationGroup.remove(m);
+    m.material.dispose();
+  }
+  stationMarkers.clear();
+  state.stations = [];
+
+  for (const raw of arr) {
+    if (!raw.filename) continue;
+    const filename = String(raw.filename);
+    const id = raw.id != null ? String(raw.id) : filename.replace(/\.[^.]+$/, '');
+    const position = new THREE.Vector3(raw.x, raw.y, raw.z);
+    const quaternion = new THREE.Quaternion(raw.qx, raw.qy, raw.qz, raw.qw).normalize();
+    state.stations.push({ id, filename, position, quaternion, raw });
+  }
+
+  state.stations.sort((a, b) => {
+    const na = parseFloat(a.id), nb = parseFloat(b.id);
+    const aNum = !isNaN(na) && String(na) === a.id;
+    const bNum = !isNaN(nb) && String(nb) === b.id;
+    if (aNum && bNum) return na - nb;
+    return a.id.localeCompare(b.id);
+  });
+
+  rebuildSpatial();
+  rebuildStationsList();
+  document.getElementById('stations-section').style.display = '';
+  document.getElementById('pano-toggle-btn').style.display = '';
+  setLoadStatus('json-btn', `${state.stations.length} stations`, true);
+  updateTopbarHint();
+}
+
+document.getElementById('ply-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  setLoadStatus('ply-btn', 'loading…');
+  try { await loadPLYFromBuffer(await file.arrayBuffer(), file.name); }
+  catch (err) { console.error(err); setLoadStatus('ply-btn', 'error'); }
+});
+document.getElementById('json-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  setLoadStatus('json-btn', 'loading…');
+  try { await loadStationsFromText(await file.text(), file.name); }
+  catch (err) { console.error(err); setLoadStatus('json-btn', err.message); }
+});
+document.getElementById('pano-input').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  setLoadStatus('pano-btn', `loading ${files.length}…`);
+  const fileByName = new Map(files.map(f => [f.name, f]));
+  let matched = 0;
+  for (const station of state.stations) {
+    const file = fileByName.get(station.filename);
+    if (!file) continue;
+    const tex = await loadTexture(URL.createObjectURL(file));
+    state.panoTextures.set(station.id, tex);
+    matched++;
+  }
+  rebuildStationsList();
+  setLoadStatus('pano-btn', `${matched}/${state.stations.length}`, matched > 0);
+  updateTopbarHint();
+});
+function loadTexture(url) {
+  return new Promise((resolve, reject) => {
+    new THREE.TextureLoader().load(url, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      resolve(tex);
+    }, undefined, reject);
+  });
+}
+
+/* ============================================================
+   UNIT DETECTION
+   ============================================================ */
+function detectAndApplyUnits() {
+  if (state.unitMode !== 'auto') {
+    state.unitScale = ({ m: 1, ft: 0.3048, in: 0.0254, mm: 0.001 })[state.unitMode] || 1;
+    state.detectedUnit = state.unitMode;
+    onUnitsResolved();
+    return;
+  }
+  if (!state.pointCloud || !state.stations.length) {
+    state.unitScale = 1; state.detectedUnit = null;
+    onUnitsResolved(); return;
+  }
+  const pBox = state.pointCloud.geometry.boundingBox;
+  const pSize = new THREE.Vector3(); pBox.getSize(pSize);
+  const pExtent = Math.max(pSize.x, pSize.y, pSize.z);
+  const xs = state.stations.map(s => s.position.x);
+  const ys = state.stations.map(s => s.position.y);
+  const zs = state.stations.map(s => s.position.z);
+  const sExtent = Math.max(
+    Math.max(...xs) - Math.min(...xs),
+    Math.max(...ys) - Math.min(...ys),
+    Math.max(...zs) - Math.min(...zs), 0.01
+  );
+  const ratio = pExtent / sExtent;
+  const candidates = [
+    { name: 'm', ratio: 1, scale: 1 },
+    { name: 'ft', ratio: 3.2808, scale: 0.3048 },
+    { name: 'in', ratio: 39.3701, scale: 0.0254 },
+    { name: 'mm', ratio: 1000, scale: 0.001 },
+  ];
+  let best = candidates[0]; let bestDist = Infinity;
+  for (const c of candidates) {
+    const d = Math.abs(Math.log(ratio / c.ratio));
+    if (d < bestDist) { bestDist = d; best = c; }
+  }
+  if (bestDist > 0.7) { state.unitScale = 1; state.detectedUnit = null; }
+  else { state.unitScale = best.scale; state.detectedUnit = best.name; }
+  onUnitsResolved();
+}
+
+function onUnitsResolved() {
+  // Pick a sensible display unit if not set
+  if (state.detectedUnit === 'ft' || state.detectedUnit === 'in') {
+    if (state.displayUnit === 'm') state.displayUnit = 'ftin';
+  } else if (state.detectedUnit === 'm' || state.detectedUnit === 'mm') {
+    if (state.displayUnit !== 'm') state.displayUnit = 'm';
+  }
+  refreshUnitLabel();
+  rebuildMeasurementsList();
+  if (state.spatialGrid) updateDefaultSnapRadius();
+}
+
+function applySceneScale() {
+  if (state.pointCloud) state.pointCloud.scale.setScalar(state.unitScale);
+}
+
+/* ============================================================
+   MARKERS / GRID
+   ============================================================ */
+function getSceneDiagonal() {
+  let d = 1;
+  if (state.pointCloud) {
+    const size = new THREE.Vector3();
+    state.pointCloud.geometry.boundingBox.getSize(size);
+    d = Math.max(d, size.length() * state.unitScale);
+  }
+  return d;
+}
+
+function rebuildSpatial() {
+  for (const m of stationMarkers.values()) {
+    stationGroup.remove(m); m.material.dispose();
+  }
+  stationMarkers.clear();
+  if (state.stations.length) {
+    const diag = getSceneDiagonal();
+    const r = Math.max(0.05, diag * 0.004);
+    const geom = new THREE.SphereGeometry(r, 16, 12);
+    for (const station of state.stations) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: station.id === state.activeStationId ? 0xffffff : 0xff7b29,
+      });
+      const m = new THREE.Mesh(geom, mat);
+      m.position.copy(station.position);
+      m.userData.stationId = station.id;
+      m.visible = state.showStations;
+      stationGroup.add(m);
+      stationMarkers.set(station.id, m);
+    }
+  }
+  scene.remove(gridHelper);
+  gridHelper.geometry.dispose(); gridHelper.material.dispose();
+  const diag = getSceneDiagonal();
+  const gridSize = Math.max(20, Math.ceil(diag));
+  const gridDiv = Math.min(gridSize, 50);
+  gridHelper = new THREE.GridHelper(gridSize, gridDiv, 0x2a2a30, 0x1a1a1e);
+  gridHelper.visible = state.showGrid;
+  scene.add(gridHelper);
+}
+
+function rebuildStationsList() {
+  const list = document.getElementById('stations-list');
+  document.getElementById('stations-count').textContent = state.stations.length || '—';
+  if (!state.stations.length) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = '';
+  for (const station of state.stations) {
+    const hasPano = state.panoTextures.has(station.id);
+    const item = document.createElement('div');
+    item.className = 'station-row' + (hasPano ? ' has-pano' : ' disabled');
+    item.innerHTML = `<span class="dot"></span><span class="name">${station.id}</span>`;
+    if (hasPano) {
+      item.addEventListener('click', () => {
+        state.activeStationId = station.id;
+        rebuildStationsList();
+        rebuildSpatial();
+        setPanoOpen(true);  // auto-open
+      });
+    }
+    list.appendChild(item);
+  }
+}
+
+/* ============================================================
+   FRAMING
+   ============================================================ */
+function frameAll() {
+  if (!state.pointCloud) return;
+  const box = state.pointCloud.geometry.boundingBox;
+  const c = new THREE.Vector3(); box.getCenter(c);
+  c.multiplyScalar(state.unitScale);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const radius = size.length() * 0.5 * state.unitScale;
+  const worldCenter = c.clone().applyMatrix4(coordRoot.matrixWorld);
+  const dist = radius * 2.5;
+  camera.position.copy(worldCenter).add(new THREE.Vector3(dist, dist, dist));
+  controls.target.copy(worldCenter);
+  controls.update();
+}
+
+/* ============================================================
+   POINTER → SNAP
+   ============================================================ */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+function setPointer(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function pickWithSnap() {
+  // 1. Ray-test the point cloud to get a seed point
+  if (!state.pointCloud) return null;
+  const diag = getSceneDiagonal();
+  raycaster.params.Points.threshold = Math.max(0.02, diag * 0.001) * (state.pointSize / 1.5);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(state.pointCloud, false);
+  if (!hits.length) return null;
+  const seedWorld = hits[0].point.clone();
+
+  if (!state.snapEnabled || !state.spatialGrid) {
+    return { point: seedWorld, normal: null, planarity: 0, surfaceType: 'none' };
+  }
+
+  // 2. Transform seed back to raw cloud space (world → coordRoot local → undo PLY scale)
+  const seedLocal = seedWorld.clone();
+  coordRoot.worldToLocal(seedLocal);
+  const seedRaw = seedLocal.clone().multiplyScalar(1 / state.unitScale);
+
+  // 3. Query neighbors in raw space
+  const radiusRaw = state.snapRadius / state.unitScale;
+  const neighbors = state.spatialGrid.queryRadius(seedRaw, radiusRaw);
+  if (neighbors.length < 8) {
+    return { point: seedWorld, normal: null, planarity: 0, surfaceType: 'none' };
+  }
+
+  // 4. Fit plane in raw space
+  const fit = fitPlane(state.spatialGrid, neighbors);
+  if (!fit) return { point: seedWorld, normal: null, planarity: 0, surfaceType: 'none' };
+
+  if (fit.planarity < state.snapPlanarity) {
+    return { point: seedWorld, normal: null, planarity: fit.planarity, surfaceType: 'none' };
+  }
+
+  // 5. Snap seedRaw to the plane: project along normal
+  const toCentroid = fit.centroid.clone().sub(seedRaw);
+  const dist = toCentroid.dot(fit.normal);
+  const snappedRaw = seedRaw.clone().add(fit.normal.clone().multiplyScalar(dist));
+
+  // Sanity: if the snap moved farther than the search radius, the fit is unreliable.
+  if (Math.abs(dist) > radiusRaw) {
+    return { point: seedWorld, normal: null, planarity: fit.planarity, surfaceType: 'none' };
+  }
+
+  // 6. Transform snapped point back to world space
+  const snappedLocal = snappedRaw.clone().multiplyScalar(state.unitScale);
+  const snappedWorld = snappedLocal.clone().applyMatrix4(coordRoot.matrixWorld);
+
+  // 7. Transform normal to world space
+  const normalWorld = fit.normal.clone().transformDirection(coordRoot.matrixWorld);
+  const toCam = camera.position.clone().sub(snappedWorld);
+  if (normalWorld.dot(toCam) < 0) normalWorld.negate();
+
+  // 8. Classify surface
+  let surfaceType = 'none';
+  const upDot = Math.abs(normalWorld.y);
+  if (upDot > 0.85) surfaceType = 'h';
+  else if (upDot < 0.25) surfaceType = 'v';
+  else surfaceType = 's';
+
+  return {
+    point: snappedWorld,
+    normal: normalWorld,
+    planarity: fit.planarity,
+    surfaceType,
+  };
+}
+
+function hideCursor() {
+  cursorDisc.visible = false;
+  cursorRing.visible = false;
+  cursorDot.visible = false;
+}
+
+function updateCursor() {
+  const showCursor = state.measuring || state.editingEndpoint !== null;
+  if (!showCursor) {
+    hideCursor();
+    document.getElementById('surface-info').classList.remove('show');
+    return;
+  }
+
+  // Throttle: only re-run snap when pointer or camera has moved (and rate-limited)
+  const now = performance.now();
+  const isDirty = cursorDirty.pointer || cursorDirty.camera;
+  if (!isDirty || (now - lastCursorRunMs) < cursorMinIntervalMs) {
+    return; // keep last cursor placement; it's still valid
+  }
+  cursorDirty.pointer = false;
+  cursorDirty.camera = false;
+  lastCursorRunMs = now;
+
+  const result = pickWithSnap();
+  if (!result) {
+    state.hoverPoint = null;
+    hideCursor();
+    document.getElementById('surface-info').classList.remove('show');
+    return;
+  }
+
+  state.hoverPoint = result.point;
+  state.hoverNormal = result.normal;
+  state.hoverPlanarity = result.planarity;
+  state.hoverSurfaceType = result.surfaceType;
+
+  // If a constraint is active and we have an anchor, project the hover point
+  const anchor = getActiveAnchor();
+  const constrained = (state.constraint !== 'free' && anchor)
+    ? applyConstraint(anchor, result.point)
+    : result.point;
+  state.constrainedHoverPoint = constrained;
+
+  // Cursor scale: a fraction of distance from camera, so size is screen-stable
+  const distFromCam = constrained.distanceTo(camera.position);
+  const cursorScale = distFromCam * 0.012;
+
+  cursorDisc.position.copy(constrained);
+  cursorRing.position.copy(constrained);
+  cursorDot.position.copy(constrained);
+
+  if (result.normal) {
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), result.normal);
+    cursorDisc.quaternion.copy(q);
+    cursorRing.quaternion.copy(q);
+  } else {
+    cursorDisc.lookAt(camera.position);
+    cursorRing.lookAt(camera.position);
+  }
+
+  cursorDisc.scale.set(cursorScale, cursorScale, cursorScale);
+  cursorRing.scale.set(cursorScale, cursorScale, cursorScale);
+  cursorDot.scale.setScalar(cursorScale * 0.07); // small precise dot
+
+  // Color by surface type
+  const colorMap = {
+    'h': 0x79e87e,
+    'v': 0xffd166,
+    's': 0xc084fc,
+    'none': 0xff5577,
+  };
+  const c = colorMap[result.surfaceType];
+  cursorDisc.material.color.setHex(c);
+  cursorRing.material.color.setHex(c);
+  cursorDot.material.color.setHex(0xffffff); // dot stays white for max contrast
+
+  const snapped = result.surfaceType !== 'none';
+  cursorDisc.visible = snapped;
+  cursorRing.visible = true;
+  cursorDot.visible = true;
+
+  const surfInfo = document.getElementById('surface-info');
+  const swatch = document.getElementById('surface-swatch');
+  const text = document.getElementById('surface-text');
+  swatch.className = 'swatch ' + result.surfaceType;
+  const labels = { h: 'Horizontal surface', v: 'Vertical surface', s: 'Sloped surface', none: 'Free point' };
+  text.textContent = labels[result.surfaceType] + (snapped ? ` · planarity ${(result.planarity*100).toFixed(0)}%` : '');
+  surfInfo.classList.add('show');
+}
+
+/* ============================================================
+   MEASUREMENT CONSTRAINTS
+   ============================================================
+   Constraints lock the second endpoint relative to an anchor point.
+   Axes are expressed in DATA space (so "Z" matches the data's Z axis,
+   not Three.js's Y-up world). We transform through coordRoot to get
+   the world-space direction.
+*/
+function getConstraintAxesWorld() {
+  // Returns world-space versions of the data-space X/Y/Z axes
+  const m = coordRoot.matrixWorld;
+  return {
+    x: new THREE.Vector3(1, 0, 0).transformDirection(m),
+    y: new THREE.Vector3(0, 1, 0).transformDirection(m),
+    z: new THREE.Vector3(0, 0, 1).transformDirection(m),
+  };
+}
+
+function applyConstraint(anchor, candidate) {
+  // Project `candidate` onto the constraint relative to `anchor`.
+  // Returns a new Vector3.
+  if (state.constraint === 'free' || !anchor) return candidate.clone();
+
+  const axes = getConstraintAxesWorld();
+  const delta = candidate.clone().sub(anchor);
+
+  switch (state.constraint) {
+    case 'x': {
+      // line through anchor along X
+      const axis = axes.x;
+      const proj = axis.clone().multiplyScalar(delta.dot(axis));
+      return anchor.clone().add(proj);
+    }
+    case 'y': {
+      const axis = axes.y;
+      const proj = axis.clone().multiplyScalar(delta.dot(axis));
+      return anchor.clone().add(proj);
+    }
+    case 'z': {
+      const axis = axes.z;
+      const proj = axis.clone().multiplyScalar(delta.dot(axis));
+      return anchor.clone().add(proj);
+    }
+    case 'horizontal': {
+      // Plane spanned by the two non-up axes; project delta onto that plane
+      // (= remove the up component)
+      const upAxis = state.upAxis === 'z' ? axes.z : axes.y;
+      const upComp = upAxis.clone().multiplyScalar(delta.dot(upAxis));
+      const planar = delta.clone().sub(upComp);
+      return anchor.clone().add(planar);
+    }
+    case 'vertical': {
+      // Line through anchor along the up axis; keep only up component
+      const upAxis = state.upAxis === 'z' ? axes.z : axes.y;
+      const upComp = upAxis.clone().multiplyScalar(delta.dot(upAxis));
+      return anchor.clone().add(upComp);
+    }
+  }
+  return candidate.clone();
+}
+
+function getActiveAnchor() {
+  // Returns the anchor point relevant to the current operation, or null.
+  if (state.editingEndpoint) {
+    const { meas, idx } = state.editingEndpoint;
+    // For multi-segment paths, only the two endpoints have a clear single neighbor;
+    // for interior points we skip constraint to avoid ambiguity.
+    if (idx === 0) return meas.points[1] || null;
+    if (idx === meas.points.length - 1) return meas.points[meas.points.length - 2] || null;
+    return null;
+  }
+  if (state.measuring && state.pendingPath.length > 0) {
+    return state.pendingPath[state.pendingPath.length - 1];
+  }
+  return null;
+}
+
+// Visual guide line for the active constraint
+const guideLineGeom = new THREE.BufferGeometry();
+guideLineGeom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+const guideLineMat = new THREE.LineDashedMaterial({
+  color: 0xffffff,
+  dashSize: 0.1,
+  gapSize: 0.05,
+  depthTest: false,
+  transparent: true,
+  opacity: 0.4,
+});
+const guideLine = new THREE.Line(guideLineGeom, guideLineMat);
+guideLine.renderOrder = 9997;
+guideLine.frustumCulled = false;
+guideLine.visible = false;
+scene.add(guideLine);
+
+function updateConstraintGuide() {
+  const showCursor = state.measuring || state.editingEndpoint !== null;
+  if (!showCursor) {
+    guideLine.visible = false;
+    return;
+  }
+  const anchor = getActiveAnchor();
+  if (!anchor || state.constraint === 'free') {
+    guideLine.visible = false;
+    return;
+  }
+  const axes = getConstraintAxesWorld();
+  const upAxis = state.upAxis === 'z' ? axes.z : axes.y;
+  const diag = getSceneDiagonal();
+  const length = diag * 0.5;
+
+  let pts = null;
+  if (state.constraint === 'x') {
+    pts = [anchor.clone().sub(axes.x.clone().multiplyScalar(length)),
+           anchor.clone().add(axes.x.clone().multiplyScalar(length))];
+  } else if (state.constraint === 'y') {
+    pts = [anchor.clone().sub(axes.y.clone().multiplyScalar(length)),
+           anchor.clone().add(axes.y.clone().multiplyScalar(length))];
+  } else if (state.constraint === 'z') {
+    pts = [anchor.clone().sub(axes.z.clone().multiplyScalar(length)),
+           anchor.clone().add(axes.z.clone().multiplyScalar(length))];
+  } else if (state.constraint === 'vertical') {
+    pts = [anchor.clone().sub(upAxis.clone().multiplyScalar(length)),
+           anchor.clone().add(upAxis.clone().multiplyScalar(length))];
+  } else if (state.constraint === 'horizontal') {
+    // For horizontal, draw a small cross showing the two horizontal axes
+    const a1 = state.upAxis === 'z' ? axes.x : axes.x;
+    const a2 = state.upAxis === 'z' ? axes.y : axes.z;
+    // Two lines: but our geometry only holds one segment. For horizontal we'll
+    // just draw the more useful diagonal — the axis from anchor toward the cursor's
+    // horizontal projection. Simpler: skip the guide for horizontal/vertical and
+    // rely on the rubber-band line itself, which already shows direction.
+    pts = null;
+  }
+
+  if (!pts) {
+    guideLine.visible = false;
+    return;
+  }
+  const arr = guideLineGeom.attributes.position.array;
+  arr[0] = pts[0].x; arr[1] = pts[0].y; arr[2] = pts[0].z;
+  arr[3] = pts[1].x; arr[4] = pts[1].y; arr[5] = pts[1].z;
+  guideLineGeom.attributes.position.needsUpdate = true;
+  guideLineGeom.computeBoundingSphere();
+  guideLine.computeLineDistances();
+  // Color guide by axis
+  const c = state.constraint === 'x' ? 0xff5577
+          : state.constraint === 'y' ? 0x79e87e
+          : state.constraint === 'z' ? 0x6ed4ff
+          : 0xffffff;
+  guideLine.material.color.setHex(c);
+  guideLine.visible = true;
+}
+
+
+function startMeasuring() {
+  state.measuring = true;
+  state.pendingPath = [];
+  vpContainer.classList.add('measuring');
+  document.getElementById('measure-btn').classList.add('active');
+  document.getElementById('vp-mode-label').textContent = 'Measure';
+}
+function stopMeasuring(commit = false) {
+  if (commit && state.pendingPath.length >= 2) commitPendingPath();
+  state.measuring = false;
+  state.pendingPath = [];
+  updatePendingLine();
+  vpContainer.classList.remove('measuring');
+  document.getElementById('measure-btn').classList.remove('active');
+  document.getElementById('vp-mode-label').textContent = 'Navigate';
+  document.getElementById('surface-info').classList.remove('show');
+  cursorDisc.visible = false;
+  cursorRing.visible = false;
+  cursorDot.visible = false;
+}
+
+function addPendingPoint() {
+  const pt = state.constrainedHoverPoint || state.hoverPoint;
+  if (!pt) return;
+  state.pendingPath.push(pt.clone());
+  updatePendingLine();
+
+  // In simple two-point mode, commit and reset after the second click
+  if (!state.continuousMode && state.pendingPath.length >= 2) {
+    commitPendingPath();
+    state.pendingPath = [];
+    updatePendingLine();
+  }
+}
+
+function updatePendingLine() {
+  const pts = [...state.pendingPath];
+  if (state.measuring && state.pendingPath.length > 0) {
+    const previewPt = state.constrainedHoverPoint || state.hoverPoint;
+    if (previewPt) pts.push(previewPt.clone()); // rubber band
+  }
+  const arr = pendingLineGeom.attributes.position.array;
+  for (let i = 0; i < pts.length; i++) {
+    arr[i*3] = pts[i].x;
+    arr[i*3+1] = pts[i].y;
+    arr[i*3+2] = pts[i].z;
+  }
+  pendingLineGeom.setDrawRange(0, pts.length);
+  pendingLineGeom.attributes.position.needsUpdate = true;
+  pendingLineGeom.computeBoundingSphere();
+}
+
+function commitPendingPath() {
+  const pts = state.pendingPath.map(p => p.clone());
+  // build measurement
+  const segments = [];
+  let total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const d = pts[i].distanceTo(pts[i+1]);
+    segments.push(d);
+    total += d;
+  }
+
+  // visuals
+  const lineGeom = new THREE.BufferGeometry().setFromPoints(pts);
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0x6ed4ff,
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+    opacity: 0.95,
+  });
+  const line = new THREE.Line(lineGeom, lineMat);
+  line.renderOrder = 999;
+  measureGroup.add(line);
+
+  // Endpoint dots — clamped so they're visible but never absurdly large
+  const diag = getSceneDiagonal();
+  const dotR = Math.min(0.05, Math.max(0.01, diag * 0.0008));
+  const dotGeom = new THREE.SphereGeometry(dotR, 12, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: 0x6ed4ff, depthTest: false, transparent: true, opacity: 0.95 });
+  const id = measId++;
+  const dots = pts.map((p, idx) => {
+    const dot = new THREE.Mesh(dotGeom, dotMat);
+    dot.position.copy(p);
+    dot.renderOrder = 1000;
+    dot.userData.measId = id;
+    dot.userData.pointIdx = idx;
+    measureGroup.add(dot);
+    return dot;
+  });
+
+  // Label divs (one per segment + total at last segment)
+  const segLabels = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const div = document.createElement('div');
+    div.style.cssText = `
+      position: absolute;
+      pointer-events: none;
+      background: rgba(110, 212, 255, 0.15);
+      border: 1px solid rgba(110, 212, 255, 0.5);
+      color: #6ed4ff;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      white-space: nowrap;
+      transform: translate(-50%, -50%);
+      backdrop-filter: blur(4px);
+      font-weight: 500;
+    `;
+    labelsLayer.appendChild(div);
+    segLabels.push(div);
+  }
+
+  const meas = {
+    id,
+    label: '',
+    points: pts,
+    segments,
+    total,
+    line,
+    dots,
+    segLabels,
+    geomShared: { dotGeom, dotMat, lineGeom, lineMat },
+  };
+  state.measurements.push(meas);
+  rebuildMeasurementsList();
+}
+
+function recomputeMeasurement(meas) {
+  const pts = meas.points;
+  meas.segments = [];
+  meas.total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const d = pts[i].distanceTo(pts[i+1]);
+    meas.segments.push(d);
+    meas.total += d;
+  }
+  // Update line geometry
+  meas.geomShared.lineGeom.setFromPoints(pts);
+  meas.geomShared.lineGeom.computeBoundingSphere();
+  // Update dot positions (they move with the points already if we pass refs, but be explicit)
+  for (let i = 0; i < pts.length; i++) {
+    meas.dots[i].position.copy(pts[i]);
+  }
+}
+
+function pickMeasureEndpoint() {
+  // Returns { meas, idx, dot } if pointer is over an endpoint dot, else null.
+  raycaster.setFromCamera(pointer, camera);
+  const dots = [];
+  for (const m of state.measurements) for (const d of m.dots) dots.push(d);
+  const hits = raycaster.intersectObjects(dots, false);
+  if (!hits.length) return null;
+  const dot = hits[0].object;
+  const meas = state.measurements.find(m => m.id === dot.userData.measId);
+  if (!meas) return null;
+  return { meas, idx: dot.userData.pointIdx, dot };
+}
+
+function deleteMeasurement(id) {
+  const idx = state.measurements.findIndex(m => m.id === id);
+  if (idx === -1) return;
+  const m = state.measurements[idx];
+  measureGroup.remove(m.line);
+  m.geomShared.lineGeom.dispose();
+  m.geomShared.lineMat.dispose();
+  for (const d of m.dots) measureGroup.remove(d);
+  m.geomShared.dotGeom.dispose();
+  m.geomShared.dotMat.dispose();
+  for (const l of m.segLabels) l.remove();
+  state.measurements.splice(idx, 1);
+  if (state.selectedMeasureId === id) state.selectedMeasureId = null;
+  rebuildMeasurementsList();
+}
+
+function clearAllMeasurements() {
+  while (state.measurements.length) deleteMeasurement(state.measurements[0].id);
+}
+
+function selectMeasurement(id) {
+  state.selectedMeasureId = state.selectedMeasureId === id ? null : id;
+  rebuildMeasurementsList();
+  // pulse the line slightly
+  for (const m of state.measurements) {
+    m.line.material.opacity = m.id === state.selectedMeasureId ? 1.0 : 0.95;
+    for (const d of m.dots) d.scale.setScalar(m.id === state.selectedMeasureId ? 1.5 : 1);
+  }
+}
+
+/* ============================================================
+   UNITS / FORMATTING
+   ============================================================ */
+const UNIT_CYCLE = ['m', 'ft', 'ftin', 'ftin-frac'];
+const UNIT_LABELS = { m: 'm', ft: 'ft', ftin: "ft'in\"", 'ftin-frac': "ft'in\" frac" };
+
+function refreshUnitLabel() {
+  document.getElementById('unit-label').textContent = UNIT_LABELS[state.displayUnit];
+}
+
+function cycleUnit() {
+  const idx = UNIT_CYCLE.indexOf(state.displayUnit);
+  state.displayUnit = UNIT_CYCLE[(idx + 1) % UNIT_CYCLE.length];
+  refreshUnitLabel();
+  rebuildMeasurementsList();
+}
+
+function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
+function reduceFraction(num, den) {
+  if (num === 0) return [0, 1];
+  const g = gcd(Math.abs(num), den);
+  return [num / g, den / g];
+}
+
+function formatDistance(meters) {
+  switch (state.displayUnit) {
+    case 'm':
+      if (meters < 0.01) return `${(meters * 1000).toFixed(0)} mm`;
+      if (meters < 1) return `${(meters * 100).toFixed(1)} cm`;
+      return `${meters.toFixed(3)} m`;
+    case 'ft': {
+      const ft = meters * 3.2808399;
+      return `${ft.toFixed(3)}'`;
+    }
+    case 'ftin': {
+      const totalIn = meters * 39.3700787;
+      const ft = Math.floor(totalIn / 12);
+      const inches = totalIn - ft * 12;
+      return `${ft}' ${inches.toFixed(2)}"`;
+    }
+    case 'ftin-frac': {
+      const totalIn = meters * 39.3700787;
+      const ft = Math.floor(totalIn / 12);
+      const remIn = totalIn - ft * 12;
+      const wholeIn = Math.floor(remIn);
+      const fracIn = remIn - wholeIn;
+      const denom = state.fractionDenom;
+      const numerator = Math.round(fracIn * denom);
+      if (numerator === denom) {
+        // round up to next inch
+        const inches = wholeIn + 1;
+        if (inches === 12) return `${ft + 1}'`;
+        return `${ft}' ${inches}"`;
+      }
+      if (numerator === 0) {
+        if (wholeIn === 0) return `${ft}'`;
+        return `${ft}' ${wholeIn}"`;
+      }
+      const [n, d] = reduceFraction(numerator, denom);
+      if (wholeIn === 0) return `${ft}' ${n}/${d}"`;
+      return `${ft}' ${wholeIn} ${n}/${d}"`;
+    }
+  }
+  return `${meters.toFixed(3)} m`;
+}
+
+function formatDistanceDetail(meters) {
+  // Always show meters in parens for cross-reference
+  if (state.displayUnit === 'm') return null;
+  return `(${meters.toFixed(3)} m)`;
+}
+
+/* ============================================================
+   MEASUREMENT LIST UI
+   ============================================================ */
+function rebuildMeasurementsList() {
+  const list = document.getElementById('measure-list');
+  document.getElementById('meas-count').textContent = state.measurements.length;
+  if (!state.measurements.length) {
+    list.innerHTML = `<div class="empty-list">
+      Press <span class="kbd">M</span> to start measuring, then click two points.<br><br>
+      <span class="kbd">C</span> toggles continuous mode for multi-segment paths (<span class="kbd">Enter</span> to finish).<br><br>
+      <span class="kbd">2</span><span class="kbd">3</span><span class="kbd">4</span> lock to X/Y/Z. <span class="kbd">5</span> horizontal, <span class="kbd">6</span> vertical, <span class="kbd">1</span> free.
+    </div>`;
+    return;
+  }
+  list.innerHTML = '';
+  state.measurements.forEach((m, idx) => {
+    const item = document.createElement('div');
+    item.className = 'meas' + (m.id === state.selectedMeasureId ? ' selected' : '');
+    const segCount = m.segments.length;
+    const isMulti = segCount > 1;
+    const detail = formatDistanceDetail(m.total);
+    item.innerHTML = `
+      <div class="header-row">
+        <span class="num mono">${idx + 1}</span>
+        <input class="label-input ${m.label ? '' : 'placeholder'}"
+               data-id="${m.id}"
+               value="${m.label || ''}"
+               placeholder="Add label…">
+        <div class="actions">
+          <button class="icon-mini" data-action="focus" data-id="${m.id}" title="Frame in view">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h6M3 3v6M21 3h-6M21 3v6M3 21h6M3 21v-6M21 21h-6M21 21v-6"/></svg>
+          </button>
+          <button class="icon-mini danger" data-action="delete" data-id="${m.id}" title="Delete">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="dist mono">${formatDistance(m.total)}</div>
+      <div class="meta-line">
+        ${isMulti ? `${segCount} segments · ` : ''}${detail || ''}
+      </div>
+    `;
+    item.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.closest('.actions')) return;
+      selectMeasurement(m.id);
+    });
+    list.appendChild(item);
+  });
+
+  // Wire label edits
+  list.querySelectorAll('.label-input').forEach(inp => {
+    inp.addEventListener('input', (e) => {
+      const id = parseInt(inp.dataset.id, 10);
+      const m = state.measurements.find(x => x.id === id);
+      if (m) {
+        m.label = inp.value;
+        inp.classList.toggle('placeholder', !m.label);
+      }
+    });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+  });
+  list.querySelectorAll('.icon-mini').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.id, 10);
+      if (btn.dataset.action === 'delete') deleteMeasurement(id);
+      else if (btn.dataset.action === 'focus') focusMeasurement(id);
+    });
+  });
+}
+
+function focusMeasurement(id) {
+  const m = state.measurements.find(x => x.id === id);
+  if (!m) return;
+  const box = new THREE.Box3();
+  for (const p of m.points) box.expandByPoint(p);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const dist = Math.max(size.length() * 1.5, 1);
+  // Keep current camera direction, just move target & position
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  controls.target.copy(center);
+  camera.position.copy(center).addScaledVector(dir, dist);
+  controls.update();
+  selectMeasurement(id);
+}
+
+/* ============================================================
+   MEASUREMENT LABELS — update each frame
+   ============================================================ */
+function updateLiveLabel() {
+  if (!state.measuring || state.pendingPath.length === 0) {
+    liveLabel.style.display = 'none';
+    return;
+  }
+  const previewPt = state.constrainedHoverPoint || state.hoverPoint;
+  if (!previewPt) {
+    liveLabel.style.display = 'none';
+    return;
+  }
+  const last = state.pendingPath[state.pendingPath.length - 1];
+  const d = last.distanceTo(previewPt);
+  let total = d;
+  for (let i = 0; i < state.pendingPath.length - 1; i++) {
+    total += state.pendingPath[i].distanceTo(state.pendingPath[i+1]);
+  }
+
+  const w = renderer.domElement.clientWidth;
+  const h = renderer.domElement.clientHeight;
+  const mid = last.clone().add(previewPt).multiplyScalar(0.5);
+  const screen = mid.clone().project(camera);
+  if (screen.z < -1 || screen.z > 1) {
+    liveLabel.style.display = 'none';
+    return;
+  }
+  const x = (screen.x * 0.5 + 0.5) * w;
+  const y = (-screen.y * 0.5 + 0.5) * h;
+  liveLabel.style.display = 'block';
+  liveLabel.style.left = x + 'px';
+  liveLabel.style.top = y + 'px';
+  if (state.continuousMode && state.pendingPath.length > 1) {
+    liveLabel.textContent = `${formatDistance(d)} · Σ ${formatDistance(total)}`;
+  } else {
+    liveLabel.textContent = formatDistance(d);
+  }
+}
+
+function updateMeasurementLabels() {
+  if (!state.measurements.length) return;
+  const w = renderer.domElement.clientWidth;
+  const h = renderer.domElement.clientHeight;
+  for (const m of state.measurements) {
+    for (let i = 0; i < m.segments.length; i++) {
+      const div = m.segLabels[i];
+      const a = m.points[i];
+      const b = m.points[i+1];
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      const screen = mid.clone().project(camera);
+      if (screen.z < -1 || screen.z > 1) {
+        div.style.display = 'none';
+      } else {
+        const x = (screen.x * 0.5 + 0.5) * w;
+        const y = (-screen.y * 0.5 + 0.5) * h;
+        div.style.display = 'block';
+        div.style.left = x + 'px';
+        div.style.top = y + 'px';
+        // Show segment value (and total if it's a multi-segment, on last segment only)
+        const isLast = i === m.segments.length - 1;
+        const isMulti = m.segments.length > 1;
+        let txt = formatDistance(m.segments[i]);
+        if (m.label && isLast) txt = `${m.label}: ${formatDistance(m.total)}`;
+        else if (isMulti && isLast) txt = `Σ ${formatDistance(m.total)}`;
+        div.textContent = txt;
+      }
+    }
+  }
+}
+
+/* ============================================================
+   POINTER EVENTS
+   ============================================================ */
+let lastClickTime = 0;
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  setPointer(e);
+  cursorDirty.pointer = true;
+
+  // While editing an endpoint, drag it to the snap cursor location
+  if (state.editingEndpoint) {
+    const result = pickWithSnap();
+    if (result) {
+      const { meas, idx } = state.editingEndpoint;
+      const anchor = getActiveAnchor();
+      const newPos = (state.constraint !== 'free' && anchor)
+        ? applyConstraint(anchor, result.point)
+        : result.point;
+      meas.points[idx].copy(newPos);
+      recomputeMeasurement(meas);
+    }
+    return;
+  }
+
+  // Otherwise: if not measuring, hovering over an endpoint should hint draggability
+  if (!state.measuring) {
+    const ep = pickMeasureEndpoint();
+    renderer.domElement.style.cursor = ep ? 'grab' : '';
+  }
+});
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (state.measuring) return;
+  if (!state.measurements.length) return;
+  setPointer(e);
+  const ep = pickMeasureEndpoint();
+  if (ep) {
+    state.editingEndpoint = ep;
+    controls.enabled = false;
+    vpContainer.classList.add('measuring'); // hides hardware cursor; we draw our own
+    selectMeasurement(ep.meas.id);
+    e.preventDefault();
+  }
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (state.editingEndpoint) {
+    state.editingEndpoint = null;
+    controls.enabled = true;
+    vpContainer.classList.remove('measuring');
+    renderer.domElement.style.cursor = '';
+    rebuildMeasurementsList(); // refresh list with new total
+  }
+});
+
+controls.addEventListener('change', () => {
+  cursorDirty.camera = true;
+  if (state.panoFollowEnabled) updatePanoFromCloudView();
+});
+
+renderer.domElement.addEventListener('click', (e) => {
+  setPointer(e);
+  if (state.measuring) {
+    addPendingPoint();
+    return;
+  }
+  // Otherwise: pick station marker (only if not editing an endpoint)
+  if (state.editingEndpoint) return;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects([...stationMarkers.values()], false);
+  if (hits.length) {
+    const id = hits[0].object.userData.stationId;
+    if (state.panoTextures.has(id)) {
+      state.activeStationId = id;
+      rebuildStationsList();
+      rebuildSpatial();
+      setPanoOpen(true);  // auto-open
+    }
+  }
+});
+renderer.domElement.addEventListener('dblclick', (e) => {
+  if (state.measuring && state.pendingPath.length >= 2) {
+    e.preventDefault();
+    stopMeasuring(true);
+  }
+});
+
+/* ============================================================
+   PANO PREVIEW PANEL (no projection — just an interactive image)
+   ============================================================ */
+const panoPanel = document.getElementById('pano-panel');
+const panoCanvasWrap = document.getElementById('pano-canvas-wrap');
+const panoEmptyDiv = document.getElementById('pano-empty');
+
+let panoRenderer = null, panoScene = null, panoCamera = null, panoSphere = null;
+let panoView = { lon: 0, lat: 0, dragging: false, lastX: 0, lastY: 0 };
+
+function ensurePanoRenderer() {
+  if (panoRenderer) return;
+  panoRenderer = new THREE.WebGLRenderer({ antialias: true });
+  panoRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  panoCanvasWrap.appendChild(panoRenderer.domElement);
+  panoScene = new THREE.Scene();
+  panoCamera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
+  panoCamera.position.set(0, 0, 0.01);
+
+  const sphereGeom = new THREE.SphereGeometry(50, 64, 48);
+  sphereGeom.scale(-1, 1, 1);
+  const sphereMat = new THREE.MeshBasicMaterial({ map: null });
+  panoSphere = new THREE.Mesh(sphereGeom, sphereMat);
+  panoScene.add(panoSphere);
+
+  panoRenderer.domElement.addEventListener('pointerdown', (e) => {
+    panoView.dragging = true;
+    panoView.lastX = e.clientX;
+    panoView.lastY = e.clientY;
+    panoRenderer.domElement.setPointerCapture(e.pointerId);
+  });
+  panoRenderer.domElement.addEventListener('pointermove', (e) => {
+    if (!panoView.dragging) return;
+    const dx = e.clientX - panoView.lastX;
+    const dy = e.clientY - panoView.lastY;
+    if (state.panoFollowEnabled) {
+      // Adjust the offset, then re-derive lon/lat from the cloud view
+      state.panoYawOffsetDeg -= dx * 0.2;
+      // Pitch can drift too, but keep it as a direct lat adjustment
+      panoView.lat = Math.max(-89, Math.min(89, panoView.lat + dy * 0.2));
+      updatePanoFromCloudView();
+      // Note: updatePanoFromCloudView will overwrite lat with the cloud-derived value,
+      // so for free pitch control we leave that out unless the user disabled follow.
+      // Practical effect: in follow mode, vertical drag on pano is not very useful;
+      // user should disable follow if they want to look up/down independently.
+    } else {
+      panoView.lon -= dx * 0.2;
+      panoView.lat = Math.max(-89, Math.min(89, panoView.lat + dy * 0.2));
+    }
+    panoView.lastX = e.clientX;
+    panoView.lastY = e.clientY;
+  });
+  panoRenderer.domElement.addEventListener('pointerup', (e) => {
+    panoView.dragging = false;
+    try { panoRenderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
+  });
+  panoRenderer.domElement.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    panoCamera.fov = Math.max(20, Math.min(110, panoCamera.fov + e.deltaY * 0.05));
+    panoCamera.updateProjectionMatrix();
+  }, { passive: false });
+
+  function resizePano() {
+    const w = panoCanvasWrap.clientWidth, h = panoCanvasWrap.clientHeight;
+    if (w <= 0 || h <= 0) return;
+    panoRenderer.setSize(w, h, false);
+    panoCamera.aspect = w / h;
+    panoCamera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resizePano).observe(panoCanvasWrap);
+  resizePano();
+}
+
+function updatePanoFromCloudView() {
+  if (!state.panoOpen || !state.activeStationId || !panoSphere || !panoSphere.material.map) return;
+  const station = state.stations.find(s => s.id === state.activeStationId);
+  if (!station) return;
+
+  // Active station's world position
+  const stationWorldPos = station.position.clone().applyMatrix4(coordRoot.matrixWorld);
+
+  // Direction from station to whatever the cloud camera is looking at
+  const lookAt = controls.target.clone().sub(stationWorldPos);
+  if (lookAt.lengthSq() < 1e-6) return;
+  lookAt.normalize();
+
+  // Convert direction to spherical (Three.js Y-up convention)
+  const lat = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(lookAt.y, -1, 1)));
+  const lon = THREE.MathUtils.radToDeg(Math.atan2(lookAt.z, lookAt.x));
+
+  panoView.lon = lon + state.panoYawOffsetDeg;
+  panoView.lat = lat;
+}
+
+function showPanoForActive() {
+  const id = state.activeStationId;
+  const tex = id ? state.panoTextures.get(id) : null;
+  document.getElementById('pano-name').textContent = id || '—';
+  if (!tex) {
+    panoEmptyDiv.style.display = 'flex';
+    if (panoSphere) panoSphere.material.map = null, panoSphere.material.needsUpdate = true;
+    return;
+  }
+  panoEmptyDiv.style.display = 'none';
+  ensurePanoRenderer();
+  panoSphere.material.map = tex;
+  panoSphere.material.needsUpdate = true;
+  panoView.lon = 0; panoView.lat = 0;
+  panoCamera.fov = 75; panoCamera.updateProjectionMatrix();
+  if (state.panoFollowEnabled) updatePanoFromCloudView();
+}
+
+function setPanoOpen(open) {
+  state.panoOpen = open;
+  panoPanel.classList.toggle('show', open);
+  document.getElementById('pano-toggle-btn').classList.toggle('active', open);
+  if (open) {
+    showPanoForActive();
+    updatePanoFromCloudView();
+  }
+}
+
+function setPanoFollow(on) {
+  state.panoFollowEnabled = on;
+  const btn = document.getElementById('pano-follow-btn');
+  const lbl = document.getElementById('pano-follow-state');
+  if (on) {
+    btn.style.color = 'var(--accent)';
+    lbl.textContent = 'FOLLOW';
+    updatePanoFromCloudView();
+  } else {
+    btn.style.color = 'var(--text-faint)';
+    lbl.textContent = 'FREE';
+  }
+}
+
+document.getElementById('pano-toggle-btn').addEventListener('click', () => setPanoOpen(!state.panoOpen));
+document.getElementById('pano-close').addEventListener('click', () => setPanoOpen(false));
+document.getElementById('pano-follow-btn').addEventListener('click', () => setPanoFollow(!state.panoFollowEnabled));
+
+/* ============================================================
+   DOCK / KEYBOARD
+   ============================================================ */
+document.getElementById('measure-btn').addEventListener('click', () => {
+  if (state.measuring) stopMeasuring(true);
+  else startMeasuring();
+});
+document.getElementById('continuous-btn').addEventListener('click', () => {
+  state.continuousMode = !state.continuousMode;
+  document.getElementById('continuous-btn').classList.toggle('active', state.continuousMode);
+});
+document.getElementById('frame-btn').addEventListener('click', frameAll);
+document.getElementById('unit-cycle').addEventListener('click', cycleUnit);
+
+function setConstraint(c) {
+  state.constraint = c;
+  document.querySelectorAll('.constraint-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.constraint === c);
+  });
+  // mark cursor dirty so it reprojects next frame
+  cursorDirty.pointer = true;
+}
+
+document.querySelectorAll('.constraint-btn').forEach(btn => {
+  btn.addEventListener('click', () => setConstraint(btn.dataset.constraint));
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'm' || e.key === 'M') {
+    if (state.measuring) stopMeasuring(true); else startMeasuring();
+  }
+  else if (e.key === 'Escape') {
+    if (state.measuring) stopMeasuring(false);
+  }
+  else if (e.key === 'Enter') {
+    if (state.measuring && state.pendingPath.length >= 2) stopMeasuring(true);
+  }
+  else if (e.key === 'u' || e.key === 'U') cycleUnit();
+  else if (e.key === 'f' || e.key === 'F') frameAll();
+  else if (e.key === 'c' || e.key === 'C') {
+    state.continuousMode = !state.continuousMode;
+    document.getElementById('continuous-btn').classList.toggle('active', state.continuousMode);
+  }
+  else if (e.key === '1') setConstraint('free');
+  else if (e.key === '2') setConstraint('x');
+  else if (e.key === '3') setConstraint('y');
+  else if (e.key === '4') setConstraint('z');
+  else if (e.key === '5') setConstraint('horizontal');
+  else if (e.key === '6') setConstraint('vertical');
+  else if (e.key === 'p' || e.key === 'P') {
+    if (state.stations.length) setPanoOpen(!state.panoOpen);
+  }
+  else if (e.key === 'Backspace' || e.key === 'Delete') {
+    if (state.measuring && state.pendingPath.length > 0) {
+      state.pendingPath.pop();
+      updatePendingLine();
+    } else if (state.selectedMeasureId !== null) {
+      deleteMeasurement(state.selectedMeasureId);
+    }
+  }
+});
+
+/* ============================================================
+   SETTINGS WIRING
+   ============================================================ */
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPopover = document.getElementById('settings-popover');
+settingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsPopover.classList.toggle('show');
+  settingsBtn.classList.toggle('active');
+});
+document.addEventListener('click', (e) => {
+  if (!settingsPopover.contains(e.target) && e.target !== settingsBtn) {
+    settingsPopover.classList.remove('show');
+    settingsBtn.classList.remove('active');
+  }
+});
+
+function bindNumPair(id, key, onChange) {
+  const slider = document.getElementById(id);
+  const number = document.getElementById(id + '-n');
+  function update(v) {
+    state[key] = parseFloat(v);
+    if (slider) slider.value = v;
+    if (number) number.value = v;
+    if (onChange) onChange();
+  }
+  if (slider) slider.addEventListener('input', () => update(slider.value));
+  if (number) number.addEventListener('input', () => update(number.value));
+}
+bindNumPair('snap-radius', 'snapRadius');
+bindNumPair('snap-planarity', 'snapPlanarity');
+
+document.getElementById('snap-enabled').addEventListener('change', (e) => {
+  state.snapEnabled = e.target.checked;
+});
+document.getElementById('up-axis').addEventListener('change', (e) => {
+  state.upAxis = e.target.value;
+  applyUpAxis();
+  frameAll();
+});
+document.getElementById('unit-mode').addEventListener('change', (e) => {
+  state.unitMode = e.target.value;
+  detectAndApplyUnits();
+  applySceneScale();
+  frameAll();
+});
+document.getElementById('point-size').addEventListener('input', (e) => {
+  state.pointSize = parseFloat(e.target.value);
+  if (state.pointCloud) state.pointCloud.material.size = state.pointSize;
+});
+document.getElementById('show-grid').addEventListener('change', (e) => {
+  state.showGrid = e.target.checked;
+  gridHelper.visible = state.showGrid;
+});
+document.getElementById('show-stations').addEventListener('change', (e) => {
+  state.showStations = e.target.checked;
+  for (const m of stationMarkers.values()) m.visible = state.showStations;
+});
+
+function updateTopbarHint() {
+  const hint = document.getElementById('topbar-hint');
+  if (!state.pointCloud) hint.textContent = 'Load a PLY to begin';
+  else if (state.measuring) hint.textContent = `Click to add point · ${state.pendingPath.length} placed`;
+  else hint.textContent = `${state.measurements.length} measurement${state.measurements.length === 1 ? '' : 's'}`;
+}
+
+/* ============================================================
+   RENDER LOOP
+   ============================================================ */
+let lastHintUpdate = 0;
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  updateCursor();
+  updateConstraintGuide();
+  if (state.measuring) updatePendingLine();
+  updateLiveLabel();
+  updateMeasurementLabels();
+  renderer.render(scene, camera);
+
+  if (panoRenderer && state.panoOpen && panoSphere && panoSphere.material.map) {
+    const phi = THREE.MathUtils.degToRad(90 - panoView.lat);
+    const theta = THREE.MathUtils.degToRad(panoView.lon);
+    const target = new THREE.Vector3(
+      500 * Math.sin(phi) * Math.cos(theta),
+      500 * Math.cos(phi),
+      500 * Math.sin(phi) * Math.sin(theta)
+    );
+    panoCamera.lookAt(target);
+    panoRenderer.render(panoScene, panoCamera);
+  }
+
+  // Update hint occasionally if measuring
+  const now = performance.now();
+  if (state.measuring && now - lastHintUpdate > 200) {
+    updateTopbarHint();
+    lastHintUpdate = now;
+  }
+}
+animate();
+
+/* ============================================================
+   AUTO-LOAD
+   ============================================================ */
+async function autoLoad() {
+  if (CONFIG.PROJECT_NAME) {
+    const el = document.getElementById('project-name');
+    el.textContent = CONFIG.PROJECT_NAME;
+    el.style.display = '';
+  }
+  const tasks = [];
+  if (CONFIG.PLY_URL) tasks.push((async () => {
+    setLoadStatus('ply-btn', 'fetching…');
+    try {
+      const r = await fetch(CONFIG.PLY_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await loadPLYFromBuffer(await r.arrayBuffer(), CONFIG.PLY_URL.split('/').pop());
+    } catch (err) { console.error(err); setLoadStatus('ply-btn', `failed: ${err.message}`); }
+  })());
+  if (CONFIG.STATIONS_URL) tasks.push((async () => {
+    setLoadStatus('json-btn', 'fetching…');
+    try {
+      const r = await fetch(CONFIG.STATIONS_URL);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await loadStationsFromText(await r.text(), CONFIG.STATIONS_URL.split('/').pop());
+    } catch (err) { console.error(err); setLoadStatus('json-btn', `failed: ${err.message}`); }
+  })());
+  await Promise.all(tasks);
+  if (CONFIG.PANO_FOLDER && state.stations.length) {
+    const folder = CONFIG.PANO_FOLDER.endsWith('/') ? CONFIG.PANO_FOLDER : CONFIG.PANO_FOLDER + '/';
+    setLoadStatus('pano-btn', `fetching ${state.stations.length}…`);
+    let matched = 0; let failed = 0;
+    for (const station of state.stations) {
+      try {
+        const tex = await loadTexture(folder + station.filename);
+        state.panoTextures.set(station.id, tex);
+        matched++;
+      } catch (err) { failed++; }
+    }
+    rebuildStationsList();
+    setLoadStatus('pano-btn', `${matched}/${state.stations.length}` + (failed ? ` (${failed} failed)` : ''), matched > 0);
+    updateTopbarHint();
+  }
+}
+autoLoad();
+</script>
+</body>
+</html>
