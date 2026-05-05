@@ -1,0 +1,2176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      .code-wrapper {
+        position: relative;
+        background: #282c34; /* Dark background */
+        border-radius: 8px;
+        margin: 20px 0;
+      }
+
+      /* Scrollable area */
+      .code-wrapper pre {
+        margin: 0;
+        padding: 1.5rem;
+        max-height: 400px; /* Limits height */
+        overflow: auto; /* Adds scrollbars when needed */
+        color: #abb2bf;
+        font-family: 'Courier New', monospace;
+        line-height: 1.5;
+      }
+
+      /* The Copy Button */
+      .copy-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: white;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: background 0.2s;
+      }
+
+      .copy-btn:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      .copy-btn.success {
+        background: #28a745;
+        border-color: #28a745;
+      }
+    </style>
+  </head>
+  <body>
+    JS:
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+    /**
+ * annotation-layer.js — Main orchestrator.
+ * Updated for pdf.js v4.1.392
+ *
+ * Type-agnostic and pane-agnostic. Tools provide:
+ *   - input handlers (→ overlay events)
+ *   - rendering (→ page overlays, pane cards)
+ *   - panes (→ sidebar views)
+ *   - forms (→ new-annotation flow)
+ *   - actions (→ card action buttons)
+ *
+ * The layer owns: viewer wait, event bus integration, overlay lifecycle,
+ * pane mounting, sidebar-view registration, CRUD plumbing, selection.
+ *
+ * Adding anything new = writing one tool object and adding it to
+ * config.tools (or calling layer.registerTool()). No core edits.
+ */
+
+import * as T from './templates.js';
+import { ToolManager, defaultTools } from './tools.js';
+import { buildStorage } from './storage.js';
+
+// ─── Helpers ──────────────────────────────────────────────────
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function pixelToNorm(pageDiv, px, py) {
+  const r = pageDiv.getBoundingClientRect();
+  return { x: clamp((px - r.left) / r.width, 0, 1), y: clamp((py - r.top) / r.height, 0, 1) };
+}
+function genId() {
+  return 'ann_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+const SIDEBAR_VIEW_NONE = 0;
+const CURSOR_TOOL = { SELECT: 0, HAND: 1 };
+
+// ─── AnnotationLayer ──────────────────────────────────────────
+
+export default class AnnotationLayer {
+  constructor(config) {
+    this.config = {
+      apiBaseUrl: '/api/annotations',
+      documentId: null,
+      currentUser: { name: 'Reviewer', initials: 'R' },
+      tools: null,
+      ...config,
+    };
+
+    this.annotations = new Map();
+    this.overlays = new Map();
+    this.elements = new Map();
+
+    // Pane state:
+    //   panes:       paneId → { tool, el, listEl, searchVal, filterVal, cardElements: Map }
+    //   activePaneId: the pane currently showing in the sidebar (or null)
+    this.panes = new Map();
+    this.activePaneId = null;
+
+    this.selectedId = null;
+    this.pendingForm = null;       // { el, tool, opts, paneId }
+    this.currentPage = 1;
+    this._openingSidebar = false;
+
+    this.store = buildStorage(this.config);
+
+    const tools = this.config.tools || defaultTools();
+    this.toolMgr = new ToolManager(tools, this);
+  }
+
+  // ── Init ───────────────────────────────────────────────────
+
+  async init() {
+    this.app = await this._waitForViewer();
+    this.eventBus = this.app.eventBus;
+
+    await this._waitForFirstPage();
+
+    this._injectCSS();
+    this._disableFeatures();
+    this._buildFloatingToolbar();
+    this._buildPanes();
+    this._bindEventBus();
+    this._bindKeyboard();
+
+    this._ensureOverlays();
+
+    try {
+      const saved = await this.store.load();
+      if (Array.isArray(saved)) {
+        saved.forEach(a => { a._persisted = true; this.annotations.set(a.id, a); });
+        this._renderAll();
+        this._rebuildAllPanes();
+      }
+    } catch (e) {
+      console.warn('[AnnotationLayer] Load failed:', e);
+    }
+
+    this.toolMgr.setActive('pointer');
+    this._syncToolbarUI();
+  }
+
+  // ── Event Bus ──────────────────────────────────────────────
+
+  _bindEventBus() {
+    const eb = this.eventBus;
+
+    eb.on('pagerendered', ({ pageNumber }) => {
+      requestAnimationFrame(() => {
+        this._ensureOverlays();
+        this._renderAnnotationsForPage(pageNumber);
+      });
+    });
+
+    eb.on('pagesloaded', () => {
+      requestAnimationFrame(() => this._ensureOverlays());
+    });
+
+    eb.on('documentloaded', () => {
+      this._clearAll();
+      this.store.load().then(saved => {
+        if (Array.isArray(saved)) {
+          saved.forEach(a => { a._persisted = true; this.annotations.set(a.id, a); });
+          this._renderAll();
+          this._rebuildAllPanes();
+        }
+      }).catch(e => console.warn('[AnnotationLayer] Reload failed:', e));
+    });
+
+    eb.on('pagesdestroy', () => {
+      this.overlays.forEach(o => o.remove());
+      this.overlays.clear();
+      this.elements.clear();
+    });
+
+    let scaleTimer = null;
+    const onScaleOrResize = () => {
+      if (scaleTimer) cancelAnimationFrame(scaleTimer);
+      scaleTimer = requestAnimationFrame(() => { scaleTimer = null; this._ensureOverlays(); });
+    };
+    eb.on('scalechanging', onScaleOrResize);
+    eb.on('resize', onScaleOrResize);
+
+    eb.on('updateviewarea', ({ location }) => {
+      if (location && location.pageNumber) this.currentPage = location.pageNumber;
+    });
+
+    eb.on('sidebarviewchanged', ({ view }) => {
+      if (this._openingSidebar) return;
+      if (view === SIDEBAR_VIEW_NONE) this._onPaneClosed();
+      else if (this.activePaneId) this._onPaneClosed();
+    });
+
+    eb.on('cursortoolchanged', ({ tool }) => {
+      if (tool === CURSOR_TOOL.HAND && this.toolMgr.activeTool?.id !== 'hand') {
+        this._cancelForm();
+        this.toolMgr.activeTool = this.toolMgr.get('hand');
+        this._syncToolbarUI();
+      } else if (tool === CURSOR_TOOL.SELECT && this.toolMgr.activeTool?.id === 'hand') {
+        this.toolMgr.activeTool = this.toolMgr.get('pointer');
+        this._syncToolbarUI();
+      }
+    });
+
+    document.addEventListener('mouseup', () => this.toolMgr.cancelAllDrags());
+  }
+
+  dispatchCursorTool(toolId) {
+    this.eventBus.dispatch('switchcursortool', { source: this, tool: toolId });
+  }
+
+  // ── CSS injection ──────────────────────────────────────────
+
+  _injectCSS() {
+    if (document.getElementById('ann-layer-css')) return;
+    const link = document.createElement('link');
+    link.id = 'ann-layer-css';
+    link.rel = 'stylesheet';
+    link.href = this.config.cssPath || 'src/pdfjs-annotations.css';
+    document.head.appendChild(link);
+  }
+
+  _disableFeatures() {
+    const hide = [
+      'editorFreeText', 'editorInk', 'editorStamp', 'editorHighlight',
+      'editorModeButtons', 'editorModeSeparator',
+      'pageRotateCw', 'pageRotateCcw',
+      'secondaryOpenFile', 'presentationMode',
+      'viewBookmark', 'viewBookmarkSeparator',
+    ];
+    hide.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.style.display = 'none'; el.setAttribute('aria-hidden', 'true'); }
+    });
+    try { this.app.pdfViewer.annotationEditorMode = { mode: -1 }; } catch (_) {}
+  }
+
+  // ── Floating toolbar ───────────────────────────────────────
+
+  _buildFloatingToolbar() {
+    this.floatingTb = T.floatingToolbar(this.toolMgr.toolbarTools);
+    document.body.appendChild(this.floatingTb);
+    this._bindToolbarClicks();
+  }
+
+  _bindToolbarClicks() {
+    this.floatingTb.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ann-ftool-btn');
+      if (!btn) return;
+      this.setActiveTool(btn.dataset.tool);
+    });
+  }
+
+  rebuildToolbar() {
+    if (!this.floatingTb) return;
+    const next = T.floatingToolbar(this.toolMgr.toolbarTools);
+    this.floatingTb.replaceWith(next);
+    this.floatingTb = next;
+    this._bindToolbarClicks();
+    this._syncToolbarUI();
+  }
+
+  setActiveTool(id) {
+    this._cancelForm();
+    this.toolMgr.setActive(id);
+    this._syncToolbarUI();
+    this._syncOverlayInteractivity();
+  }
+
+  _syncToolbarUI() {
+    const activeId = this.toolMgr.activeTool?.id;
+    this.floatingTb.querySelectorAll('.ann-ftool-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tool === activeId);
+    });
+  }
+
+  _syncOverlayInteractivity() {
+    const active = this.toolMgr.needsOverlayInput;
+    const overlayClass = this.toolMgr.overlayClass;
+    this.overlays.forEach(ov => {
+      ov.classList.toggle('active', active);
+      ov.className = ov.className.replace(/\bmode-\S+/g, '').trim();
+      if (active && overlayClass) ov.classList.add(overlayClass);
+    });
+  }
+
+  // ── Keyboard shortcuts ─────────────────────────────────────
+
+  _bindKeyboard() {
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      for (const tool of this.toolMgr.tools) {
+        if (!tool.shortcut) continue;
+        if (tool.shortcut === 'escape' && e.key === 'Escape') { this.setActiveTool(tool.id); return; }
+        if (e.key.toLowerCase() === tool.shortcut) { this.setActiveTool(tool.id); return; }
+      }
+    });
+  }
+
+  // ── Panes ──────────────────────────────────────────────────
+  //
+  // Each pane provider (tool with paneId) gets:
+  //   - a DOM container added to #sidebarContent (starts hidden)
+  //   - a button added to #sidebarViewButtons (native sidebar radio group)
+  //   - a toggle button added to the main pdfjs toolbar (optional, only if
+  //     `paneMainToolbarButton !== false`)
+  //
+  // The tool provides the pane CONTENT. If tool.buildPane(ctx) is defined,
+  // it gets full control. Otherwise the layer provides a default pane body
+  // (header + search/filter toolbar + list) based on paneLabel, paneTypes,
+  // paneEmptyText, paneShowSearch, paneShowCategoryFilter.
+
+  _buildPanes() {
+    const container = document.getElementById('sidebarContent');
+    if (!container) { console.warn('[AnnotationLayer] No sidebar container found'); return; }
+
+    const viewButtons = document.getElementById('sidebarViewButtons');
+    const toolbarLeft = document.getElementById('toolbarViewerLeft');
+    const nativeToggle = document.getElementById('sidebarToggle');
+
+    for (const tool of this.toolMgr.panes()) {
+      const paneId = tool.paneId;
+
+      // Pane container
+      const paneEl = document.createElement('div');
+      paneEl.id = 'ann-pane-' + paneId;
+      paneEl.className = 'ann-pane hidden';
+
+      let listEl;
+      if (typeof tool.buildPane === 'function') {
+        // Tool-controlled pane. We still need to know where the "list" is
+        // so the layer can populate it. Convention: tool's pane element
+        // must contain an element with class .ann-pane-list.
+        const built = tool.buildPane({ layer: this, currentUser: this.config.currentUser });
+        paneEl.appendChild(built);
+        listEl = paneEl.querySelector('.ann-pane-list');
+      } else {
+        // Default pane skeleton.
+        paneEl.innerHTML = T.paneSkeleton({
+          title: tool.paneLabel || 'Annotations',
+          showSearch: tool.paneShowSearch !== false,
+          showCategoryFilter: !!tool.paneShowCategoryFilter,
+        });
+        listEl = paneEl.querySelector('.ann-pane-list');
+
+        const searchInput = paneEl.querySelector('.ann-search-input');
+        if (searchInput) searchInput.addEventListener('input', (e) => {
+          const rec = this.panes.get(paneId);
+          if (!rec) return;
+          rec.searchVal = e.target.value.toLowerCase().trim();
+          this._rebuildPane(paneId);
+        });
+        const filterSelect = paneEl.querySelector('.ann-filter-select');
+        if (filterSelect) filterSelect.addEventListener('change', (e) => {
+          const rec = this.panes.get(paneId);
+          if (!rec) return;
+          rec.filterVal = e.target.value;
+          this._rebuildPane(paneId);
+        });
+      }
+
+      container.appendChild(paneEl);
+
+      // Sidebar view button (radio in #sidebarViewButtons)
+      let viewBtn = null;
+      if (viewButtons) {
+        viewBtn = document.createElement('button');
+        viewBtn.id = 'view' + paneId.charAt(0).toUpperCase() + paneId.slice(1);
+        viewBtn.className = 'toolbarButton';
+        viewBtn.title = 'Show ' + (tool.paneLabel || paneId);
+        viewBtn.tabIndex = 6;
+        viewBtn.setAttribute('role', 'radio');
+        viewBtn.setAttribute('aria-checked', 'false');
+        viewBtn.setAttribute('aria-controls', paneEl.id);
+        viewBtn.innerHTML = `<span>${tool.paneLabel || paneId}</span>`;
+        viewBtn.addEventListener('click', () => this.openPane(paneId));
+        viewButtons.appendChild(viewBtn);
+      }
+
+      // Main-toolbar toggle button
+      let toolbarBtn = null;
+      if (tool.paneMainToolbarButton !== false && toolbarLeft) {
+        toolbarBtn = document.createElement('button');
+        toolbarBtn.className = 'ann-sidebar-btn';
+        toolbarBtn.id = 'ann-sidebar-btn-' + paneId;
+        toolbarBtn.innerHTML = tool.paneIcon || T.BUBBLE_SVG;
+        toolbarBtn.title = tool.paneLabel || paneId;
+        toolbarBtn.type = 'button';
+        toolbarBtn.addEventListener('click', () => this.togglePane(paneId));
+
+        if (nativeToggle && nativeToggle.parentNode === toolbarLeft) {
+          const spacer = nativeToggle.nextElementSibling;
+          const ref = spacer && spacer.classList.contains('toolbarButtonSpacer')
+            ? spacer.nextSibling : nativeToggle.nextSibling;
+          toolbarLeft.insertBefore(toolbarBtn, ref);
+        } else {
+          toolbarLeft.appendChild(toolbarBtn);
+        }
+      }
+
+      this.panes.set(paneId, {
+        tool, el: paneEl, listEl, viewBtn, toolbarBtn,
+        cardElements: new Map(),
+        searchVal: '', filterVal: '',
+      });
+    }
+  }
+
+  /** Open a pane by id. Opens the sidebar if needed. */
+  openPane(paneId) {
+    const rec = this.panes.get(paneId);
+    if (!rec) return;
+
+    // If another pane is already active, switch to this one.
+    if (this.activePaneId && this.activePaneId !== paneId) {
+      const prev = this.panes.get(this.activePaneId);
+      if (prev) {
+        prev.el.classList.add('hidden');
+        prev.toolbarBtn?.classList.remove('active');
+        if (prev.viewBtn) {
+          prev.viewBtn.classList.remove('toggled');
+          prev.viewBtn.setAttribute('aria-checked', 'false');
+        }
+      }
+    }
+
+    this.activePaneId = paneId;
+    rec.toolbarBtn?.classList.add('active');
+    this._applyActivePaneState();
+
+    const outer = document.getElementById('outerContainer');
+    if (outer && !outer.classList.contains('sidebarOpen')) {
+      const tog = document.getElementById('sidebarToggle');
+      if (tog) {
+        this._openingSidebar = true;
+        tog.click();
+        this._openingSidebar = false;
+        requestAnimationFrame(() => this._applyActivePaneState());
+      }
+    }
+
+    this._rebuildPane(paneId);
+  }
+
+  _applyActivePaneState() {
+    // Hide all native view content divs.
+    ['thumbnailView', 'outlineView', 'attachmentsView', 'layersView'].forEach(id => {
+      const v = document.getElementById(id);
+      if (v) v.classList.add('hidden');
+    });
+    ['viewThumbnail', 'viewOutline', 'viewAttachments', 'viewLayers'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) { btn.classList.remove('toggled'); btn.setAttribute('aria-checked', 'false'); }
+    });
+
+    // Show the active pane's content.
+    const rec = this.panes.get(this.activePaneId);
+    if (rec) {
+      rec.el.classList.remove('hidden');
+      if (rec.viewBtn) {
+        rec.viewBtn.classList.add('toggled');
+        rec.viewBtn.setAttribute('aria-checked', 'true');
+      }
+    }
+    // Also hide all other pane elements.
+    this.panes.forEach((other, id) => {
+      if (id !== this.activePaneId) other.el.classList.add('hidden');
+    });
+
+    const outlineOpts = document.getElementById('outlineOptionsContainer');
+    if (outlineOpts) outlineOpts.style.display = 'none';
+  }
+
+  _onPaneClosed() {
+    if (!this.activePaneId) return;
+    const rec = this.panes.get(this.activePaneId);
+    if (rec) {
+      rec.el.classList.add('hidden');
+      rec.toolbarBtn?.classList.remove('active');
+      if (rec.viewBtn) {
+        rec.viewBtn.classList.remove('toggled');
+        rec.viewBtn.setAttribute('aria-checked', 'false');
+      }
+    }
+    this.activePaneId = null;
+    this._cancelForm();
+    const outlineOpts = document.getElementById('outlineOptionsContainer');
+    if (outlineOpts) outlineOpts.style.display = '';
+  }
+
+  closePane(paneId) {
+    if (paneId && this.activePaneId !== paneId) return;
+    if (!this.activePaneId) return;
+    this._onPaneClosed();
+    const outer = document.getElementById('outerContainer');
+    if (outer && outer.classList.contains('sidebarOpen')) {
+      const tog = document.getElementById('sidebarToggle');
+      if (tog) {
+        this._openingSidebar = true;
+        tog.click();
+        this._openingSidebar = false;
+      }
+    }
+  }
+
+  togglePane(paneId) {
+    if (this.activePaneId === paneId) this.closePane(paneId);
+    else this.openPane(paneId);
+  }
+
+  /** Which pane should an annotation of the given type appear in? */
+  _paneForType(type) {
+    // First, ask the type's tool.
+    const tool = this.toolMgr.rendererFor(type);
+    if (tool?.paneFor && this.panes.has(tool.paneFor)) return tool.paneFor;
+    // Fallback: find a pane that lists this type.
+    for (const [paneId, rec] of this.panes) {
+      const types = rec.tool.paneTypes;
+      if (Array.isArray(types) && types.includes(type)) return paneId;
+    }
+    // Last resort: a tool that IS its own pane.
+    if (tool?.paneId) return tool.paneId;
+    return null;
+  }
+
+  // ── Pane list rebuild ──────────────────────────────────────
+
+  _rebuildAllPanes() {
+    this.panes.forEach((_rec, id) => this._rebuildPane(id));
+  }
+
+  _rebuildPane(paneId) {
+    const rec = this.panes.get(paneId);
+    if (!rec || !rec.listEl) return;
+
+    // If the tool has a custom rebuild, let it take over. It's responsible
+    // for calling this.renderCardInto(annotation, container) itself.
+    if (typeof rec.tool.rebuildPane === 'function') {
+      rec.tool.rebuildPane({ layer: this, paneEl: rec.el, listEl: rec.listEl, currentUser: this.config.currentUser, rec });
+      return;
+    }
+
+    const list = rec.listEl;
+    list.innerHTML = '';
+    rec.cardElements.clear();
+
+    const typesFilter = rec.tool.paneTypes || [];
+    const topLevel = [];
+    this.annotations.forEach(a => {
+      if (a.parentId) return;
+      if (typesFilter.length && !typesFilter.includes(a.type)) return;
+      topLevel.push(a);
+    });
+    topLevel.sort((a, b) => a.page !== b.page ? a.page - b.page : a.y - b.y);
+
+    const text = (rec.searchVal || '').trim();
+    const cat = rec.filterVal || '';
+    const filtered = topLevel.filter(a => {
+      if (cat && a.category !== cat) return false;
+      if (!text) return true;
+      const haystack = [
+        a.text, a.author, a.category, 'page ' + a.page, a.type,
+        a.signerName,
+        ...this._getReplies(a.id).map(r => r.text + ' ' + r.author),
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(text);
+    });
+
+    if (!filtered.length) {
+      const msg = (text || cat)
+        ? 'Nothing matches your filters.'
+        : (rec.tool.paneEmptyText || 'No items.');
+      list.innerHTML = `<div class="ann-pane-empty">${msg}</div>`;
+      if (this.pendingForm && this.pendingForm.paneId === paneId) {
+        this._insertFormInFlow(this.pendingForm.el, this.pendingForm.opts.page, this.pendingForm.opts.y || 0, paneId);
+      }
+      return;
+    }
+
+    let curPage = -1;
+    filtered.forEach(ann => {
+      if (ann.page !== curPage) {
+        curPage = ann.page;
+        list.appendChild(T.pageSeparator(curPage));
+      }
+      const card = this._buildCard(ann);
+      if (card) {
+        list.appendChild(card);
+        rec.cardElements.set(ann.id, card);
+      }
+    });
+
+    if (this.pendingForm && this.pendingForm.paneId === paneId) {
+      this._insertFormInFlow(this.pendingForm.el, this.pendingForm.opts.page, this.pendingForm.opts.y || 0, paneId);
+    }
+  }
+
+  _buildCard(ann) {
+    const tool = this.toolMgr.rendererFor(ann.type);
+    if (!tool || typeof tool.renderCard !== 'function') return null;
+
+    const ctx = { layer: this, currentUser: this.config.currentUser };
+    const card = tool.renderCard(ann, ctx);
+    if (ann.id === this.selectedId) card.classList.add('sel');
+
+    card.addEventListener('click', (e) => {
+      const actionEl = e.target.closest('.ann-card-action');
+      if (actionEl) {
+        e.stopPropagation();
+        const actionId = actionEl.dataset.action;
+        const handler = tool.cardActions && tool.cardActions[actionId];
+        if (typeof handler === 'function') handler(ann, card, ctx);
+        return;
+      }
+      if (e.target.closest('.ann-reply-input') || e.target.closest('textarea')) return;
+      this._scrollToAnnotation(ann.id);
+      this.selectAnnotation(ann.id);
+    });
+
+    const replies = this._getReplies(ann.id);
+    if (replies.length) {
+      const repliesDiv = document.createElement('div');
+      repliesDiv.className = 'ann-replies';
+      replies.forEach(r => repliesDiv.appendChild(T.replyElement(r, this.config.currentUser)));
+      card.appendChild(repliesDiv);
+    }
+
+    return card;
+  }
+
+  showReplyInput(parentId, card) {
+    if (card.querySelector('.ann-reply-input')) return;
+    let repliesDiv = card.querySelector('.ann-replies');
+    if (!repliesDiv) {
+      repliesDiv = document.createElement('div');
+      repliesDiv.className = 'ann-replies';
+      card.appendChild(repliesDiv);
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'ann-reply-input';
+    wrap.innerHTML = T.replyInputHtml();
+    repliesDiv.appendChild(wrap);
+
+    const ta = wrap.querySelector('.ann-reply-textarea');
+    const sendBtn = wrap.querySelector('.ann-reply-send');
+    setTimeout(() => ta.focus(), 30);
+
+    const send = async () => {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); return; }
+      const parent = this.annotations.get(parentId);
+      await this._addAnnotation({
+        type: 'comment', parentId,
+        page: parent ? parent.page : 1,
+        x: 0, y: 0, text, category: null,
+      });
+      wrap.remove();
+    };
+    sendBtn.addEventListener('click', send);
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      if (e.key === 'Escape') wrap.remove();
+    });
+  }
+
+  _getReplies(parentId) {
+    const out = [];
+    this.annotations.forEach(a => { if (a.parentId === parentId) out.push(a); });
+    return out.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+  }
+
+  // ── New-annotation form flow ───────────────────────────────
+
+  showForm(tool, opts) {
+    if (this.pendingForm) {
+      const ta = this.pendingForm.el.querySelector('textarea');
+      if (ta && ta.value.trim()) {
+        this.pendingForm.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
+      this._cancelForm();
+    }
+    if (!tool || typeof tool.buildForm !== 'function') {
+      console.warn('[AnnotationLayer] showForm: tool has no buildForm:', tool?.id);
+      return;
+    }
+
+    // Which pane does this tool's annotations live in?
+    const paneId = tool.paneFor || this._paneForType(tool.type || tool.id);
+    if (!paneId) {
+      console.warn('[AnnotationLayer] showForm: no pane for tool', tool.id);
+      return;
+    }
+
+    this._rebuildPane(paneId);
+    const formEl = tool.buildForm(opts);
+    this._insertFormInFlow(formEl, opts.page, opts.y || 0, paneId);
+    this.pendingForm = { el: formEl, tool, opts, paneId };
+
+    setTimeout(() => {
+      const first = formEl.querySelector('textarea, input:not([type=hidden]), select:not([disabled])');
+      if (first) first.focus();
+    }, 60);
+
+    const cancelBtn = formEl.querySelector('.cancel');
+    const saveBtn = formEl.querySelector('.save');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => this._cancelForm());
+    if (saveBtn)   saveBtn.addEventListener('click',   () => this._submitForm());
+
+    formEl.addEventListener('change', (e) => {
+      if (e.target.classList) e.target.classList.remove('error');
+    });
+    formEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._submitForm(); }
+      else if (e.key === 'Escape') this._cancelForm();
+    });
+
+    formEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  _submitForm() {
+    if (!this.pendingForm) return;
+    const { el, tool, opts } = this.pendingForm;
+    const result = tool.readForm(el, { ...opts, currentUser: this.config.currentUser });
+    if (!result || result.error) return;
+
+    const base = {
+      type: tool.type || tool.id,
+      page: opts.page,
+      x: opts.x, y: opts.y,
+      width: opts.width || 0, height: opts.height || 0,
+    };
+    this._addAnnotation({ ...base, ...result.data });
+    this.pendingForm = null;
+    el.remove();
+  }
+
+  _cancelForm() {
+    if (this.pendingForm) {
+      this.pendingForm.el.remove();
+      this.pendingForm = null;
+    }
+  }
+
+  _insertFormInFlow(formEl, page, y, paneId) {
+    const rec = this.panes.get(paneId);
+    if (!rec || !rec.listEl) return;
+    const list = rec.listEl;
+    const children = list.children;
+    let curPage = -1;
+    for (let i = 0; i < children.length; i++) {
+      const ch = children[i];
+      if (ch.classList.contains('ann-page-sep')) {
+        const sepPage = parseInt(ch.textContent.replace(/\D/g, ''), 10);
+        if (sepPage > page) { list.insertBefore(formEl, ch); return; }
+        curPage = sepPage;
+      } else if (ch.classList.contains('ann-card') && curPage === page) {
+        const cardY = parseFloat(ch.dataset.annY || '0');
+        if (cardY > y) { list.insertBefore(formEl, ch); return; }
+      }
+    }
+    if (curPage !== page) list.appendChild(T.pageSeparator(page));
+    list.appendChild(formEl);
+  }
+
+  // ── Page overlays ──────────────────────────────────────────
+
+  _ensureOverlays() {
+    document.querySelectorAll('.page[data-page-number]').forEach(pageDiv => {
+      const pageNum = parseInt(pageDiv.dataset.pageNumber, 10);
+      if (this.overlays.has(pageNum)) {
+        const existing = this.overlays.get(pageNum);
+        if (!pageDiv.contains(existing)) {
+          pageDiv.style.position = 'relative';
+          pageDiv.appendChild(existing);
+        }
+        return;
+      }
+      const overlay = document.createElement('div');
+      overlay.className = 'ann-overlay';
+      overlay.dataset.annPage = pageNum;
+      pageDiv.style.position = 'relative';
+      pageDiv.appendChild(overlay);
+      this.overlays.set(pageNum, overlay);
+      this._bindOverlay(overlay, pageNum, pageDiv);
+      this._renderAnnotationsForPage(pageNum);
+      this._syncOverlayInteractivity();
+    });
+  }
+
+  _bindOverlay(overlay, pageNum, pageDiv) {
+    const makeCtx = (e) => ({
+      pageNumber: pageNum,
+      pageDiv, overlay,
+      norm: pixelToNorm(pageDiv, e.clientX, e.clientY),
+      layer: this,
+      currentUser: this.config.currentUser,
+    });
+    overlay.addEventListener('click',    (e) => this.toolMgr.dispatch('onPageClick',     makeCtx(e), e));
+    overlay.addEventListener('mousedown',(e) => this.toolMgr.dispatch('onPageMouseDown', makeCtx(e), e));
+    overlay.addEventListener('mousemove',(e) => this.toolMgr.dispatch('onPageMouseMove', makeCtx(e), e));
+    overlay.addEventListener('mouseup',  (e) => this.toolMgr.dispatch('onPageMouseUp',   makeCtx(e), e));
+  }
+
+  // ── Render annotations on pages ────────────────────────────
+
+  _renderAll() {
+    this.annotations.forEach(a => { if (!a.parentId) this._renderAnnotation(a); });
+  }
+
+  _renderAnnotationsForPage(pageNum) {
+    this.annotations.forEach(a => {
+      if (a.page === pageNum && !a.parentId) this._renderAnnotation(a);
+    });
+  }
+
+  _renderAnnotation(ann) {
+    const existing = this.elements.get(ann.id);
+    if (existing) existing.remove();
+    const overlay = this.overlays.get(ann.page);
+    if (!overlay) return;
+
+    const tool = this.toolMgr.rendererFor(ann.type);
+    if (!tool || typeof tool.renderOverlay !== 'function') return;
+
+    const ctx = { layer: this, currentUser: this.config.currentUser };
+    const el = tool.renderOverlay(ann, ctx);
+    if (!el) return;
+
+    el.dataset.annId = ann.id;
+    if (ann.id === this.selectedId) el.classList.add('sel');
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.selectAnnotation(ann.id);
+      // Open the pane that owns this annotation type.
+      const paneId = this._paneForType(ann.type);
+      if (paneId) {
+        this.openPane(paneId);
+        this._scrollToCard(ann.id, paneId);
+      }
+    });
+
+    overlay.appendChild(el);
+    this.elements.set(ann.id, el);
+  }
+
+  // ── CRUD ───────────────────────────────────────────────────
+
+  async _addAnnotation(data) {
+    const user = this.config.currentUser;
+    const { id: _id, ...clean } = data;
+    const ann = {
+      parentId: null,
+      author: user.name || 'Reviewer',
+      authorInitials: user.initials || T.initials(user.name || 'Reviewer'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...clean,
+      id: genId(),
+      _persisted: false,
+    };
+
+    this.annotations.set(ann.id, ann);
+    if (!ann.parentId) this._renderAnnotation(ann);
+    this._rebuildPanesFor(ann.type);
+
+    try {
+      const saved = await this.store.save(ann);
+      if (saved?.id && saved.id !== ann.id) {
+        this.annotations.delete(ann.id);
+        ann.id = saved.id;
+        this.annotations.set(ann.id, ann);
+      }
+      ann._persisted = true;
+    } catch (e) {
+      console.error('[AnnotationLayer] Save failed:', e);
+    }
+
+    if (!ann.parentId) {
+      this.selectAnnotation(ann.id);
+      const paneId = this._paneForType(ann.type);
+      if (paneId) setTimeout(() => this._scrollToCard(ann.id, paneId), 100);
+    }
+    return ann;
+  }
+
+  addAnnotation(data) { return this._addAnnotation(data); }
+
+  async deleteAnnotation(id) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+    this._getReplies(id).forEach(r => {
+      this.annotations.delete(r.id);
+      this.store.remove(r.id).catch(() => {});
+    });
+    const el = this.elements.get(id);
+    if (el) el.remove();
+    this.elements.delete(id);
+    this.annotations.delete(id);
+    if (this.selectedId === id) this.selectedId = null;
+    this._rebuildPanesFor(ann.type);
+    try { await this.store.remove(id); } catch (e) { console.error('[AnnotationLayer] Delete failed:', e); }
+  }
+
+  async updateAnnotation(id, patch) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+    Object.assign(ann, patch, { updatedAt: new Date().toISOString() });
+    if (!ann.parentId) this._renderAnnotation(ann);
+    this._rebuildPanesFor(ann.type);
+    try { await this.store.save(ann); } catch (e) { console.error('[AnnotationLayer] Update failed:', e); }
+    return ann;
+  }
+
+  _rebuildPanesFor(type) {
+    // Rebuild every pane that could show this type.
+    this.panes.forEach((rec, id) => {
+      const types = rec.tool.paneTypes || [];
+      if (!types.length || types.includes(type)) this._rebuildPane(id);
+    });
+  }
+
+  editAnnotation(id) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+    // Find the card — it may be in any pane.
+    let card = null;
+    this.panes.forEach(rec => { if (!card) card = rec.cardElements.get(id); });
+    if (!card) return;
+
+    const textDiv = card.querySelector('.ann-card-text');
+    if (!textDiv) return;
+    textDiv.innerHTML = T.editFormHtml(ann.text || '');
+
+    const ta = textDiv.querySelector('.ann-edit-textarea');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+
+    const finish = async (save) => {
+      if (save) {
+        ann.text = ta.value.trim();
+        ann.updatedAt = new Date().toISOString();
+        try { await this.store.save(ann); } catch (_) {}
+      }
+      this._rebuildPanesFor(ann.type);
+      if (!ann.parentId) this._renderAnnotation(ann);
+    };
+    textDiv.querySelector('.ann-edit-cancel').addEventListener('click', () => finish(false));
+    textDiv.querySelector('.ann-edit-save').addEventListener('click', () => finish(true));
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') finish(false);
+    });
+  }
+
+  // ── Selection & navigation ─────────────────────────────────
+
+  selectAnnotation(id) {
+    const prevId = this.selectedId;
+    this.selectedId = id;
+    [prevId, id].forEach(annId => {
+      if (!annId) return;
+      const el = this.elements.get(annId);
+      if (el) el.classList.toggle('sel', annId === id);
+      this.panes.forEach(rec => {
+        const card = rec.cardElements.get(annId);
+        if (card) card.classList.toggle('sel', annId === id);
+      });
+    });
+  }
+
+  _scrollToAnnotation(id) {
+    const ann = this.annotations.get(id);
+    if (!ann) return;
+    if (this.app?.pdfViewer) this.app.pdfViewer.currentPageNumber = ann.page;
+    setTimeout(() => {
+      const el = this.elements.get(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  }
+
+  _scrollToCard(id, paneId) {
+    const rec = this.panes.get(paneId);
+    if (!rec) return;
+    const card = rec.cardElements.get(id);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // ── Public: zoom the viewer to a region ────────────────────
+  //
+  // x,y,width,height are normalized (0..1) against the page's current
+  // rendered size. This is what zoomRegionTool calls on mouseup.
+
+  zoomToRegion(pageNumber, x, y, width, height, opts = {}) {
+    const { padding = 0.05, maxScale = 10 } = opts;
+    const viewer = this.app?.pdfViewer;
+    const container = viewer?.container;
+    if (!viewer || !container) return;
+
+    const pageView = viewer.getPageView(pageNumber - 1);
+    if (!pageView) return;
+
+    // Current page element dimensions (in CSS px at current scale).
+    const pageDiv = pageView.div;
+    const pageRect = pageDiv.getBoundingClientRect();
+
+    // Box dimensions in CSS px, current scale.
+    const boxW = width * pageRect.width;
+    const boxH = height * pageRect.height;
+    if (boxW < 2 || boxH < 2) return;
+
+    // How much do we need to scale to fit the box in the viewport?
+    const viewportW = container.clientWidth  * (1 - padding * 2);
+    const viewportH = container.clientHeight * (1 - padding * 2);
+    const scaleMult = Math.min(viewportW / boxW, viewportH / boxH);
+    const currentScale = viewer.currentScale;
+    const targetScale = Math.min(currentScale * scaleMult, maxScale);
+
+    // Compute the box's center in document coordinates before the scale
+    // change, expressed as a fraction of the page so it's scale-invariant.
+    const cxFrac = x + width  / 2;
+    const cyFrac = y + height / 2;
+
+    // Apply scale (triggers re-render, but we can set scroll right after).
+    viewer.currentScale = targetScale;
+
+    // After the re-render, compute new page position and scroll.
+    // Use a microtask + rAF so the viewer has had a chance to re-layout.
+    const scrollAfter = () => {
+      const newPageRect = pageDiv.getBoundingClientRect();
+      const newPageW = newPageRect.width;
+      const newPageH = newPageRect.height;
+      // pageDiv is offset relative to the viewer's scrollable child.
+      // offsetTop/offsetLeft give us position inside the scroll container.
+      const pageLeft = pageDiv.offsetLeft;
+      const pageTop = pageDiv.offsetTop;
+      const boxCenterX = pageLeft + cxFrac * newPageW;
+      const boxCenterY = pageTop  + cyFrac * newPageH;
+      container.scrollLeft = boxCenterX - container.clientWidth  / 2;
+      container.scrollTop  = boxCenterY - container.clientHeight / 2;
+    };
+    // pdfjs fires `scalechanging` synchronously but the DOM reflow isn't
+    // complete until the next frame.
+    requestAnimationFrame(() => requestAnimationFrame(scrollAfter));
+  }
+
+  // ── Runtime tool registration ──────────────────────────────
+
+  registerTool(tool) {
+    this.toolMgr.register(tool);
+    this.rebuildToolbar();
+    // If the tool provides a pane, we'd need to mount it too. Not currently
+    // supported — call before init() for panes.
+    if (tool.paneId && !this.panes.has(tool.paneId)) {
+      console.warn('[AnnotationLayer] Runtime pane registration not supported; pass the tool in config.tools.');
+    }
+  }
+
+  unregisterTool(id) {
+    this.toolMgr.unregister(id);
+    this.rebuildToolbar();
+  }
+
+  // ── Viewer wait helpers ────────────────────────────────────
+
+  _waitForViewer() {
+    return new Promise(resolve => {
+      const check = () => {
+        if (window.PDFViewerApplication?.pdfViewer) resolve(window.PDFViewerApplication);
+        else requestAnimationFrame(check);
+      };
+      check();
+    });
+  }
+
+  _waitForFirstPage() {
+    return new Promise(resolve => {
+      const check = () => {
+        if (document.querySelector('.page[data-page-number]')) resolve();
+        else requestAnimationFrame(check);
+      };
+      this.eventBus.on('pagesloaded', () => setTimeout(check, 50));
+      check();
+    });
+  }
+
+  // ── Cleanup ────────────────────────────────────────────────
+
+  _clearAll() {
+    this._cancelForm();
+    this.elements.forEach(el => el.remove());
+    this.elements.clear();
+    this.annotations.clear();
+    this.panes.forEach(rec => rec.cardElements.clear());
+    this.selectedId = null;
+    this.panes.forEach(rec => { if (rec.listEl) rec.listEl.innerHTML = ''; });
+  }
+
+  getAnnotations() {
+    return [...this.annotations.values()].map(({ _persisted, ...rest }) => rest);
+  }
+
+  destroy() {
+    this.overlays.forEach(o => o.remove());
+    this.overlays.clear();
+    this.elements.clear();
+    this.annotations.clear();
+    document.getElementById('ann-layer-css')?.remove();
+    this.panes.forEach(rec => {
+      rec.el.remove();
+      rec.toolbarBtn?.remove();
+      rec.viewBtn?.remove();
+    });
+    this.panes.clear();
+    this.floatingTb?.remove();
+  }
+}
+
+  </code></pre>
+    </div>
+
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+    /*
+ * pdfjs-annotations-v2.css — ADDITIONS / REPLACEMENTS
+ *
+ * Append these rules to pdfjs-annotations.css (or load after it).
+ * Some rules are generic (apply to any pane); a few are feature-specific.
+ */
+
+/* ── Generalise #ann-pane → .ann-pane ────────────────────── */
+/* If you had  #ann-pane { ... }  before, change the selector to
+   .ann-pane or add .ann-pane to it. The layer now builds multiple
+   panes (#ann-pane-review, #ann-pane-signatures, etc.), each with
+   class "ann-pane". */
+
+.ann-pane {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%;
+  background: var(--sidebar-toolbar-bg-color, #f5f6f7);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  color: var(--field-color, #060606);
+}
+.ann-pane.hidden { display: none; }
+
+/* The sidebar toggle button class is now shared (was #ann-sidebar-btn) */
+.ann-sidebar-btn {
+  display: flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 28px;
+  border: none; border-radius: 4px;
+  background: transparent; cursor: pointer;
+  color: var(--toolbar-icon-bg-color, rgba(0,0,0,0.7));
+  padding: 0 4px; transition: all 0.12s; margin-left: 2px;
+}
+.ann-sidebar-btn:hover {
+  background: var(--button-hover-color, rgba(0,0,0,0.07));
+}
+.ann-sidebar-btn.active { color: #4393F5; }
+.ann-sidebar-btn svg { width: 20px; height: 20px; }
+
+/* ── Zoom tool ───────────────────────────────────────────── */
+
+.ann-overlay.active.mode-zoom { cursor: zoom-in; }
+
+.ann-draw-zoom {
+  border: 2px solid rgba(67,147,245,0.9);
+  background: rgba(67,147,245,0.12);
+  box-shadow: 0 0 0 9999px rgba(0,0,0,0.15);  /* dim-out outside the box */
+}
+
+/* ── Signature pane footer (Finalize button) ─────────────── */
+
+.ann-sig-pane {
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%;
+}
+.ann-sig-pane .ann-pane-list {
+  flex: 1; overflow-y: auto;
+}
+.ann-sig-pane-footer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--toolbar-border-color, #bbb);
+  background: var(--toolbar-bg-color, #f9f9fa);
+}
+.ann-sig-finalize-btn {
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px solid #2b7de9;
+  background: #4393F5; color: #fff;
+  font-size: 12px; font-weight: 600;
+  border-radius: 5px; cursor: pointer;
+}
+.ann-sig-finalize-btn:hover:not(:disabled) { background: #2b7de9; }
+.ann-sig-finalize-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* The status filter dropdown reuses .ann-filter-select styling. */
+
+  </code></pre>
+    </div>
+
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+    /**
+ * signature-tool.js — Standalone signature annotation type + pane.
+ *
+ * This single file provides:
+ *   - a toolbar button
+ *   - drag input to place a signature box
+ *   - overlay rendering (image, placeholder, status badge)
+ *   - card rendering
+ *   - a dedicated sidebar pane ("Signatures") with its own filters
+ *   - card actions (sign, delete)
+ *   - a finalize() helper that POSTs to /api/documents/:id/finalize
+ *
+ * No edits to annotation-layer.js, tools.js, or templates.js.
+ *
+ * Usage:
+ *   import { PDFAnnotationLayer } from './src/index.js';
+ *   import { defaultTools } from './src/tools.js';
+ *   import { createSignatureTool } from './signature-tool.js';
+ *
+ *   const sigTool = createSignatureTool({
+ *     getAvailableSignatures: () => currentUser.savedSignatures,
+ *     signatureImageUrl:      (id) => `/api/signatures/${id}/image`,
+ *     finalizeApiBase:        '/api/documents',
+ *   });
+ *
+ *   const layer = await PDFAnnotationLayer.init({
+ *     documentId: 'doc-1',
+ *     tools: [...defaultTools(), sigTool],
+ *   });
+ *
+ *   // Later:
+ *   await sigTool.finalize(layer);
+ */
+
+import { esc, initials, formatDate, pageSeparator } from './templates.js';
+
+// ─── Icon ─────────────────────────────────────────────────────
+
+export const SIGNATURE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17.5c2 -1 4 1.5 6 1.5c4 0 6 -3 10 -3"/><path d="M7 14l8-8a2 2 0 013 3l-8 8l-4 1l1-4z"/></svg>';
+
+// ─── Factory ──────────────────────────────────────────────────
+
+export function createSignatureTool(opts = {}) {
+  const {
+    getAvailableSignatures = () => [],
+    signatureImageUrl = (id) => `/api/signatures/${encodeURIComponent(id)}/image`,
+    finalizeApiBase = '/api/documents',
+    minSize = { w: 0.02, h: 0.015 },
+  } = opts;
+
+  return {
+    // ── Identity ───────────────────────────────────────────
+    id: 'signature',
+    type: 'signature',
+    icon: SIGNATURE_SVG,
+    tip: 'Place Signature (S)',
+    shortcut: 's',
+    group: 'annotation',
+    overlayClass: 'mode-signature',
+
+    // ── Pane provider ──────────────────────────────────────
+    paneId: 'signatures',
+    paneLabel: 'Signatures',
+    paneIcon: SIGNATURE_SVG,
+    paneTypes: ['signature'],
+    paneEmptyText: 'No signatures yet.<br/>Select the signature tool and drag a box on a page.',
+    paneShowSearch: true,
+    paneShowCategoryFilter: false,
+    paneFor: 'signatures', // clicking a signature overlay opens THIS pane
+
+    // Custom pane body — uses the default list but adds a status filter
+    // and a "Finalize all" button at the bottom.
+    buildPane(ctx) {
+      const root = document.createElement('div');
+      root.className = 'ann-sig-pane';
+      root.innerHTML = `
+        <div class="ann-pane-header">
+          <h3>Signatures</h3>
+        </div>
+        <div class="ann-pane-toolbar">
+          <input class="ann-search-input" type="text" placeholder="Search by signer\u2026" />
+          <select class="ann-filter-select ann-sig-status-filter">
+            <option value="">All statuses</option>
+            <option value="placed">Awaiting</option>
+            <option value="signed">Draft</option>
+            <option value="finalized">Finalized</option>
+          </select>
+        </div>
+        <div class="ann-pane-list"></div>
+        <div class="ann-sig-pane-footer">
+          <button class="ann-sig-finalize-btn" type="button">Finalize signed</button>
+        </div>
+      `;
+
+      // Wire search + status filter. We write to an internal state object
+      // that rebuildPane() reads; the default rebuild doesn't know about
+      // status so we provide a custom rebuildPane below.
+      const searchEl = root.querySelector('.ann-search-input');
+      const statusEl = root.querySelector('.ann-sig-status-filter');
+      const finalizeBtn = root.querySelector('.ann-sig-finalize-btn');
+
+      searchEl.addEventListener('input', () => {
+        this._paneState.search = searchEl.value.toLowerCase().trim();
+        ctx.layer._rebuildPane('signatures');
+      });
+      statusEl.addEventListener('change', () => {
+        this._paneState.status = statusEl.value;
+        ctx.layer._rebuildPane('signatures');
+      });
+      finalizeBtn.addEventListener('click', async () => {
+        finalizeBtn.disabled = true;
+        finalizeBtn.textContent = 'Finalizing\u2026';
+        try { await this.finalize(ctx.layer); }
+        catch (e) { console.error('[signatureTool] Finalize failed:', e); }
+        finally {
+          finalizeBtn.disabled = false;
+          finalizeBtn.textContent = 'Finalize signed';
+        }
+      });
+
+      // Per-instance state. Attached to the tool (each tool instance gets one).
+      this._paneState = { search: '', status: '' };
+
+      return root;
+    },
+
+    // Custom rebuild — filters by status AND search, then delegates to
+    // the layer's card-building helper by appending cards directly.
+    rebuildPane({ layer, listEl, rec }) {
+      listEl.innerHTML = '';
+      if (rec) rec.cardElements.clear();
+
+      const { search = '', status = '' } = this._paneState || {};
+
+      const items = [];
+      layer.annotations.forEach(a => {
+        if (a.parentId || a.type !== 'signature') return;
+        if (status && a.status !== status) return;
+        if (search) {
+          const hay = [a.signerName, a.author, 'page ' + a.page].filter(Boolean).join(' ').toLowerCase();
+          if (!hay.includes(search)) return;
+        }
+        items.push(a);
+      });
+      items.sort((a, b) => a.page !== b.page ? a.page - b.page : a.y - b.y);
+
+      if (!items.length) {
+        listEl.innerHTML = `<div class="ann-pane-empty">${
+          (search || status) ? 'No signatures match.' : this.paneEmptyText
+        }</div>`;
+        return;
+      }
+
+      let curPage = -1;
+      for (const ann of items) {
+        if (ann.page !== curPage) {
+          curPage = ann.page;
+          listEl.appendChild(pageSeparator(curPage));
+        }
+        const card = layer._buildCard(ann);
+        if (card) {
+          listEl.appendChild(card);
+          if (rec) rec.cardElements.set(ann.id, card);
+        }
+      }
+    },
+
+    // ── Drag input ─────────────────────────────────────────
+
+    _drawing: null,
+
+    onPageMouseDown(ctx, e) {
+      e.preventDefault();
+      const rect = document.createElement('div');
+      rect.className = 'ann-draw-rect ann-draw-sig';
+      ctx.overlay.appendChild(rect);
+      this._drawing = {
+        overlay: ctx.overlay,
+        sx: ctx.norm.x, sy: ctx.norm.y,
+        cx: ctx.norm.x, cy: ctx.norm.y,
+        el: rect,
+      };
+      this._updateRect();
+    },
+
+    onPageMouseMove(ctx) {
+      if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+      this._drawing.cx = ctx.norm.x;
+      this._drawing.cy = ctx.norm.y;
+      this._updateRect();
+    },
+
+    onPageMouseUp(ctx) {
+      if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+      const d = this._drawing;
+      d.el.remove();
+      const x = Math.min(d.sx, d.cx), y = Math.min(d.sy, d.cy);
+      const w = Math.abs(d.cx - d.sx), h = Math.abs(d.cy - d.sy);
+      this._drawing = null;
+      if (w < minSize.w || h < minSize.h) return;
+
+      ctx.layer.openPane('signatures');
+      ctx.layer.showForm(this, {
+        page: ctx.pageNumber,
+        x, y, width: w, height: Math.min(h, 1 - y),
+      });
+    },
+
+    deactivate() {
+      if (this._drawing) {
+        if (this._drawing.el) this._drawing.el.remove();
+        this._drawing = null;
+      }
+    },
+
+    _updateRect() {
+      const d = this._drawing;
+      if (!d || !d.el) return;
+      const x = Math.min(d.sx, d.cx), y = Math.min(d.sy, d.cy);
+      const w = Math.abs(d.cx - d.sx), h = Math.abs(d.cy - d.sy);
+      d.el.style.left = (x * 100) + '%';
+      d.el.style.top = (y * 100) + '%';
+      d.el.style.width = (w * 100) + '%';
+      d.el.style.height = (h * 100) + '%';
+    },
+
+    // ── Overlay rendering ──────────────────────────────────
+
+    renderOverlay(ann) {
+      const el = document.createElement('div');
+      el.className = 'ann-sig';
+      if (ann.status === 'finalized') el.classList.add('finalized');
+      if (ann.status === 'placed')    el.classList.add('placed');
+      el.style.left = (ann.x * 100) + '%';
+      el.style.top = (ann.y * 100) + '%';
+      el.style.width = (ann.width * 100) + '%';
+      el.style.height = (ann.height * 100) + '%';
+      el.title = ann.signerName ? `Signature — ${ann.signerName}` : 'Signature';
+
+      if ((ann.status === 'signed' || ann.status === 'finalized') && ann.signatureId) {
+        const img = document.createElement('img');
+        img.className = 'ann-sig-img';
+        img.alt = 'Signature';
+        img.draggable = false;
+        img.src = signatureImageUrl(ann.signatureId);
+        el.appendChild(img);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'ann-sig-ph';
+        ph.innerHTML = `
+          <div class="ann-sig-ph-label">Signature</div>
+          ${ann.signerName ? `<div class="ann-sig-ph-signer">${esc(ann.signerName)}</div>` : ''}
+        `;
+        el.appendChild(ph);
+      }
+
+      const badge = document.createElement('span');
+      badge.className = 'ann-sig-badge ann-sig-badge-' + ann.status;
+      badge.textContent =
+        ann.status === 'finalized' ? 'Signed'
+        : ann.status === 'signed'  ? 'Draft' : 'Awaiting';
+      el.appendChild(badge);
+
+      return el;
+    },
+
+    // ── Card rendering ─────────────────────────────────────
+
+    renderCard(ann, ctx) {
+      const el = document.createElement('div');
+      el.className = 'ann-card ann-sig-card';
+      el.dataset.annY = ann.y;
+
+      const author = ann.author || ctx.currentUser.name || 'Reviewer';
+      const ini = ann.authorInitials || initials(author);
+      const signerName = ann.signerName || 'Unassigned';
+      const statusLabel =
+        ann.status === 'finalized' ? 'Finalized'
+        : ann.status === 'signed'  ? 'Draft signature' : 'Awaiting signature';
+
+      el.innerHTML = `
+        <div class="ann-card-top">
+          <div class="ann-card-avatar">${esc(ini)}</div>
+          <div class="ann-card-meta">
+            <div class="ann-card-author">${esc(signerName)}<span class="ann-sig-chip ann-sig-chip-${ann.status}">${esc(statusLabel)}</span></div>
+            <div class="ann-card-subtitle">Placed by ${esc(author)} \u2014 Page ${ann.page}</div>
+          </div>
+        </div>
+        <div class="ann-card-date">${formatDate(ann.createdAt)}</div>
+        <div class="ann-card-actions">
+          ${ann.status === 'placed'
+            ? '<button class="ann-card-action" data-action="sign">Sign now</button>'
+            : ''}
+          ${ann.status !== 'finalized'
+            ? '<button class="ann-card-action" data-action="delete">Delete</button>'
+            : ''}
+        </div>
+      `;
+      return el;
+    },
+
+    // ── Form ───────────────────────────────────────────────
+
+    buildForm(opts) {
+      const available = getAvailableSignatures();
+      const el = document.createElement('div');
+      el.className = 'ann-new-form ann-sig-form';
+
+      const sigOpts = available.length
+        ? available.map(s => `<option value="${esc(s.id)}">${esc(s.label || s.name || s.id)}</option>`).join('')
+        : '<option value="" disabled selected>No saved signatures</option>';
+
+      el.innerHTML = `
+        <div class="ann-new-form-title">New Signature \u2014 Page ${opts.page}</div>
+        <select class="ann-sig-mode">
+          <option value="sign-now">Sign now</option>
+          <option value="placeholder-self">Placeholder for me (sign later)</option>
+          <option value="placeholder-other">Placeholder for someone else</option>
+        </select>
+        <div class="ann-sig-field ann-sig-field-picker">
+          <select class="ann-sig-picker">${sigOpts}</select>
+        </div>
+        <div class="ann-sig-field ann-sig-field-signer" style="display:none">
+          <input class="ann-sig-signer-name" type="text" placeholder="Signer name\u2026" />
+        </div>
+        <div class="ann-new-form-actions">
+          <button class="cancel">Cancel</button>
+          <button class="primary save">Place</button>
+        </div>
+      `;
+
+      const modeSel = el.querySelector('.ann-sig-mode');
+      const pickerField = el.querySelector('.ann-sig-field-picker');
+      const signerField = el.querySelector('.ann-sig-field-signer');
+      const sync = () => {
+        const m = modeSel.value;
+        pickerField.style.display = m === 'sign-now' ? '' : 'none';
+        signerField.style.display = m === 'placeholder-other' ? '' : 'none';
+      };
+      modeSel.addEventListener('change', sync);
+      sync();
+      return el;
+    },
+
+    readForm(formEl, opts) {
+      const mode = formEl.querySelector('.ann-sig-mode').value;
+      const picker = formEl.querySelector('.ann-sig-picker');
+      const signerInput = formEl.querySelector('.ann-sig-signer-name');
+      const signatureId = picker.value || null;
+      const signerName = signerInput.value.trim();
+      const user = opts.currentUser || {};
+
+      if (mode === 'sign-now' && !signatureId) {
+        picker.classList.add('error'); picker.focus();
+        return { error: 'signature' };
+      }
+      if (mode === 'placeholder-other' && !signerName) {
+        signerInput.focus();
+        return { error: 'signer' };
+      }
+      if (mode === 'sign-now') {
+        return { data: {
+          status: 'signed', signatureId,
+          signerUserId: user.id, signerName: user.name,
+          signedAt: new Date().toISOString(),
+        }};
+      }
+      if (mode === 'placeholder-self') {
+        return { data: {
+          status: 'placed',
+          signerUserId: user.id, signerName: user.name,
+        }};
+      }
+      return { data: { status: 'placed', signerName } };
+    },
+
+    // ── Card actions ───────────────────────────────────────
+
+    cardActions: {
+      async sign(ann, card, ctx) {
+        const available = getAvailableSignatures();
+        if (!available.length) {
+          console.warn('[signatureTool] No saved signatures available');
+          return;
+        }
+        await ctx.layer.updateAnnotation(ann.id, {
+          status: 'signed',
+          signatureId: available[0].id,
+          signedAt: new Date().toISOString(),
+        });
+      },
+      delete(ann, card, ctx) { ctx.layer.deleteAnnotation(ann.id); },
+    },
+
+    // ── Finalize helper ────────────────────────────────────
+
+    async finalize(layer, { annotationIds } = {}) {
+      const result = await requestFinalize({
+        apiBase: finalizeApiBase,
+        documentId: layer.config.documentId,
+        annotationIds,
+      });
+      if (result.finalizedUrl && layer.app?.open) {
+        await layer.app.open({ url: result.finalizedUrl });
+      }
+      return result;
+    },
+  };
+}
+
+// Default instance.
+export const signatureTool = createSignatureTool();
+
+// ─── Finalize request helper ─────────────────────────────────
+
+export async function requestFinalize({ apiBase = '/api/documents', documentId, annotationIds } = {}) {
+  const base = apiBase.replace(/\/$/, '');
+  const r = await fetch(`${base}/${encodeURIComponent(documentId)}/finalize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ annotationIds: annotationIds || null }),
+  });
+  if (!r.ok) {
+    const msg = await r.text().catch(() => '');
+    throw new Error(`Finalize failed (${r.status}): ${msg}`);
+  }
+  return r.json();
+}
+
+  </code></pre>
+    </div>
+
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+    /**
+ * templates.js — PATCH NOTES
+ *
+ * Replace `paneHtml()` with `paneSkeleton(opts)` (or keep paneHtml as an
+ * alias — both patterns below).
+ *
+ * The new skeleton accepts a config so each pane can decide whether it
+ * shows a search box, a category filter, a custom title, etc. The old
+ * paneHtml was hardcoded to "Comments" + category filter + search.
+ */
+
+// ─── Add this to templates.js ─────────────────────────────────
+
+/**
+ * Generic pane skeleton. Produces a header + (optional) toolbar + list.
+ *
+ * @param {Object} opts
+ * @param {string} opts.title                — header title (e.g. "Comments", "Signatures")
+ * @param {boolean} [opts.showSearch=true]   — include the search input
+ * @param {boolean} [opts.showCategoryFilter=false] — include the category <select>
+ * @returns {string} HTML string to assign to a pane container's innerHTML
+ */
+export function paneSkeleton(opts = {}) {
+  const { title = 'Annotations', showSearch = true, showCategoryFilter = false } = opts;
+
+  const toolbarBits = [];
+  if (showSearch) {
+    toolbarBits.push(`<input class="ann-search-input" type="text" placeholder="Search\u2026" />`);
+  }
+  if (showCategoryFilter) {
+    toolbarBits.push(
+      `<select class="ann-filter-select">${categorySelectHtml({ includeAll: true })}</select>`
+    );
+  }
+  const toolbarHtml = toolbarBits.length
+    ? `<div class="ann-pane-toolbar">${toolbarBits.join('')}</div>`
+    : '';
+
+  return `
+    <div class="ann-pane-header"><h3>${esc(title)}</h3></div>
+    ${toolbarHtml}
+    <div class="ann-pane-list"></div>
+  `;
+}
+
+// ─── Backward-compat alias (optional — delete if nothing external uses it) ──
+
+export function paneHtml() {
+  return paneSkeleton({ title: 'Comments', showSearch: true, showCategoryFilter: true });
+}
+
+  </code></pre>
+    </div>
+
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+    /**
+ * tools.js — Tool registry and manager.
+ *
+ * A "tool" is any object that participates in the annotation layer.
+ * Tools can, independently, provide:
+ *
+ *   - a toolbar button (id, icon, tip, shortcut, group)
+ *   - input handlers     (onPageMouseDown/Move/Up/Click, etc.)
+ *   - annotation rendering (type + renderOverlay + renderCard)
+ *   - a sidebar pane     (paneId + paneLabel + buildPane)
+ *   - a new-annotation form (buildForm, readForm)
+ *   - card actions       (cardActions)
+ *
+ * A tool can provide any combination. Examples:
+ *
+ *   pointerTool     — toolbar button, no handlers, no rendering, no pane.
+ *                     Pure activation tool (changes cursor mode).
+ *
+ *   commentTool     — toolbar button, click handler, renders comment
+ *                     annotations. Does NOT provide a pane — it delegates
+ *                     to reviewPane.
+ *
+ *   reviewPane      — no toolbar button, no handlers. Provides the
+ *                     "Comments" sidebar view that lists comment +
+ *                     highlight annotations. Queries the layer for
+ *                     annotations matching paneTypes and renders cards
+ *                     using each annotation's tool's renderCard().
+ *
+ *   signatureTool   — toolbar button, drag handlers, renders signature
+ *                     annotations, AND provides the "Signatures" sidebar
+ *                     view. One file, one tool object, covers everything.
+ *
+ *   zoomRegionTool  — toolbar button + drag handlers. No rendering,
+ *                     no annotation type, no pane. Drag zooms the viewer.
+ *
+ * The layer never branches on type. It asks ToolManager for:
+ *   - the tool to activate on a toolbar click / shortcut   (byId)
+ *   - the tool that renders annotations of a given type    (byType)
+ *   - every tool that provides a sidebar pane              (withPanes)
+ */
+
+import * as T from './templates.js';
+
+// ─── Small helpers ────────────────────────────────────────────
+
+function positionRect(el, sx, sy, cx, cy) {
+  const x = Math.min(sx, cx);
+  const y = Math.min(sy, cy);
+  const w = Math.abs(cx - sx);
+  const h = Math.abs(cy - sy);
+  el.style.left = (x * 100) + '%';
+  el.style.top = (y * 100) + '%';
+  el.style.width = (w * 100) + '%';
+  el.style.height = (h * 100) + '%';
+  return { x, y, w, h };
+}
+
+// ─── Navigation tools ─────────────────────────────────────────
+
+export const pointerTool = {
+  id: 'pointer',
+  icon: T.TOOL_ICONS.pointer,
+  tip: 'Select (Esc)',
+  shortcut: 'escape',
+  group: 'navigation',
+  activate(ctx) { ctx.layer.dispatchCursorTool(0); },
+};
+
+export const handTool = {
+  id: 'hand',
+  icon: T.TOOL_ICONS.hand,
+  tip: 'Hand Tool',
+  shortcut: null,
+  group: 'navigation',
+  activate(ctx) { ctx.layer.dispatchCursorTool(1); },
+};
+
+// ─── Comment tool ─────────────────────────────────────────────
+// Provides comment input + rendering only. The pane is provided
+// separately by reviewPaneTool (below).
+
+export const commentTool = {
+  id: 'comment',
+  type: 'comment',
+  icon: T.BUBBLE_SVG,
+  tip: 'Add Comment (C)',
+  shortcut: 'c',
+  group: 'annotation',
+  overlayClass: 'mode-comment',
+
+  // Which pane this tool's annotations live in. Clicking a comment
+  // overlay on the page opens this pane.
+  paneFor: 'review',
+
+  onPageClick(ctx, e) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctx.layer.openPane('review');
+    ctx.layer.showForm(this, { page: ctx.pageNumber, x: ctx.norm.x, y: ctx.norm.y });
+  },
+
+  renderOverlay(ann) {
+    const el = document.createElement('div');
+    el.className = 'ann-pin';
+    el.style.left = (ann.x * 100) + '%';
+    el.style.top = (ann.y * 100) + '%';
+    el.innerHTML = T.BUBBLE_SVG;
+    el.title = ann.text || '';
+    return el;
+  },
+
+  renderCard(ann, ctx) {
+    return T.cardElement(ann, ctx.currentUser);
+  },
+
+  buildForm(opts) {
+    return T.newFormElement({ type: 'comment', page: opts.page });
+  },
+
+  readForm(formEl) {
+    const catSel = formEl.querySelector('.ann-new-form-cat');
+    const cat = catSel.value;
+    const text = formEl.querySelector('textarea').value.trim();
+    if (!cat)  { catSel.classList.add('error'); catSel.focus(); return { error: 'category' }; }
+    if (!text) { formEl.querySelector('textarea').focus(); return { error: 'text' }; }
+    return { data: { text, category: cat } };
+  },
+
+  cardActions: {
+    reply (ann, card, ctx) { ctx.layer.showReplyInput(ann.id, card); },
+    edit  (ann, card, ctx) { ctx.layer.editAnnotation(ann.id); },
+    delete(ann, card, ctx) { ctx.layer.deleteAnnotation(ann.id); },
+  },
+};
+
+// ─── Highlight tool ───────────────────────────────────────────
+
+export const highlightTool = {
+  id: 'highlight',
+  type: 'highlight',
+  icon: T.TOOL_ICONS.highlight,
+  tip: 'Highlight Region (H)',
+  shortcut: 'h',
+  group: 'annotation',
+
+  paneFor: 'review',
+
+  _drawing: null,
+
+  onPageMouseDown(ctx, e) {
+    e.preventDefault();
+    const el = document.createElement('div');
+    el.className = 'ann-draw-rect';
+    ctx.overlay.appendChild(el);
+    this._drawing = { overlay: ctx.overlay, sx: ctx.norm.x, sy: ctx.norm.y, cx: ctx.norm.x, cy: ctx.norm.y, el };
+    positionRect(el, this._drawing.sx, this._drawing.sy, this._drawing.cx, this._drawing.cy);
+  },
+
+  onPageMouseMove(ctx) {
+    if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+    this._drawing.cx = ctx.norm.x;
+    this._drawing.cy = ctx.norm.y;
+    positionRect(this._drawing.el, this._drawing.sx, this._drawing.sy, this._drawing.cx, this._drawing.cy);
+  },
+
+  onPageMouseUp(ctx) {
+    if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+    const { x, y, w, h } = positionRect(
+      this._drawing.el, this._drawing.sx, this._drawing.sy,
+      this._drawing.cx, this._drawing.cy);
+    this._drawing.el.remove();
+    this._drawing = null;
+    if (w < 0.01 || h < 0.01) return;
+    ctx.layer.openPane('review');
+    ctx.layer.showForm(this, { page: ctx.pageNumber, x, y, width: w, height: h });
+  },
+
+  deactivate() {
+    if (this._drawing) {
+      if (this._drawing.el) this._drawing.el.remove();
+      this._drawing = null;
+    }
+  },
+
+  renderOverlay(ann) {
+    const el = document.createElement('div');
+    el.className = 'ann-hl';
+    el.style.left = (ann.x * 100) + '%';
+    el.style.top = (ann.y * 100) + '%';
+    el.style.width = (ann.width * 100) + '%';
+    el.style.height = (ann.height * 100) + '%';
+    el.title = ann.text || '';
+    return el;
+  },
+
+  renderCard(ann, ctx) {
+    return T.cardElement(ann, ctx.currentUser);
+  },
+
+  buildForm(opts) { return T.newFormElement({ type: 'highlight', page: opts.page }); },
+  readForm(formEl) { return commentTool.readForm(formEl); },
+  cardActions: commentTool.cardActions,
+};
+
+// ─── Review pane (the "Comments" sidebar view) ────────────────
+// Shows comments + highlights in one list. No toolbar button, no
+// handlers, no rendering — it's a pane provider.
+
+export const reviewPaneTool = {
+  id: 'review-pane',
+
+  // Pane provider contract:
+  paneId: 'review',                       // unique sidebar view id
+  paneLabel: 'Comments',                  // sidebar button label
+  paneIcon: T.BUBBLE_SVG,                 // icon for the main-toolbar toggle
+  paneTypes: ['comment', 'highlight'],    // annotations this pane displays
+  paneEmptyText: 'No comments yet.<br/>Use the toolbar to add comments or highlights.',
+  paneShowCategoryFilter: true,           // include the category <select>
+  paneShowSearch: true,                   // include the search input
+};
+
+// ─── Default tool set ─────────────────────────────────────────
+
+export function defaultTools() {
+  return [
+    pointerTool,
+    handTool,
+    { id: 'sep' },
+    commentTool,
+    highlightTool,
+    reviewPaneTool,
+  ];
+}
+
+// ─── ToolManager ──────────────────────────────────────────────
+
+export class ToolManager {
+  constructor(tools, layer) {
+    this.layer = layer;
+    this.allTools = [];
+    this._byId = new Map();
+    this._byType = new Map();
+    this.activeTool = null;
+    (tools || []).forEach(t => this.register(t));
+  }
+
+  register(tool) {
+    if (!tool) return;
+    this.allTools.push(tool);
+    if (tool.id === 'sep') return;
+    if (tool.id) this._byId.set(tool.id, tool);
+    // A tool may provide rendering for an annotation type.
+    if (tool.type && typeof tool.renderOverlay === 'function') {
+      this._byType.set(tool.type, tool);
+    }
+  }
+
+  unregister(id) {
+    const tool = this._byId.get(id);
+    if (!tool) return;
+    this._byId.delete(id);
+    if (tool.type) this._byType.delete(tool.type);
+    const idx = this.allTools.indexOf(tool);
+    if (idx >= 0) this.allTools.splice(idx, 1);
+    if (this.activeTool === tool) this.activeTool = null;
+  }
+
+  /** Lookups ------------------------------------------------- */
+
+  get(id) { return this._byId.get(id); }
+  rendererFor(type) { return this._byType.get(type); }
+  paneProvider(paneId) {
+    return this.allTools.find(t => t.paneId === paneId);
+  }
+  panes() {
+    return this.allTools.filter(t => !!t.paneId);
+  }
+
+  /** Tools that appear in the floating toolbar (have an icon). */
+  get toolbarTools() {
+    return this.allTools.filter(t => t.id === 'sep' || (t.icon && t.tip));
+  }
+
+  /** Non-separator tools with unique ids (for shortcut lookup). */
+  get tools() { return this.allTools.filter(t => t.id && t.id !== 'sep'); }
+
+  /** Activation ---------------------------------------------- */
+
+  setActive(id) {
+    const next = this._byId.get(id);
+    if (!next) return;
+    const ctx = this._ctx();
+    if (this.activeTool && this.activeTool !== next) {
+      if (this.activeTool.deactivate) this.activeTool.deactivate(ctx);
+    }
+    this.activeTool = next;
+    if (next.activate) next.activate(ctx);
+  }
+
+  /** Does the active tool need overlay events? */
+  get needsOverlayInput() {
+    const t = this.activeTool;
+    if (!t) return false;
+    return !!(t.onPageClick || t.onPageMouseDown || t.onPageMouseMove || t.onPageMouseUp);
+  }
+
+  get overlayClass() {
+    return (this.activeTool && this.activeTool.overlayClass) || '';
+  }
+
+  dispatch(eventName, ctx, domEvent) {
+    const tool = this.activeTool;
+    if (!tool) return;
+    const handler = tool[eventName];
+    if (typeof handler === 'function') handler.call(tool, ctx, domEvent);
+  }
+
+  /** Clean up any drag state across all tools. */
+  cancelAllDrags() {
+    this.allTools.forEach(t => {
+      if (t && t._drawing) {
+        if (t._drawing.el) t._drawing.el.remove();
+        t._drawing = null;
+      }
+    });
+  }
+
+  _ctx() {
+    return { layer: this.layer, currentUser: this.layer.config.currentUser };
+  }
+}
+
+  </code></pre>
+    </div>
+
+    <div class="code-wrapper">
+      <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      <pre><code>
+    /**
+ * zoom-region-tool.js — Drag a box to zoom the viewer to that region.
+ *
+ * A tool with input handlers and a toolbar button, but no annotation
+ * type, no overlay rendering, and no pane. After mouseup, it asks the
+ * layer to zoom to the selected region and then deactivates itself
+ * (falls back to the pointer tool).
+ *
+ * Usage:
+ *   import { zoomRegionTool } from './zoom-region-tool.js';
+ *   import { defaultTools } from './src/tools.js';
+ *
+ *   await PDFAnnotationLayer.init({
+ *     tools: [...defaultTools(), zoomRegionTool],
+ *   });
+ *
+ * It lives in the 'navigation' group so it sits visually with pointer
+ * and hand. It doesn't produce overlays, but it needs overlay events
+ * to receive the drag — the layer's overlay interactivity is triggered
+ * by the presence of input handlers, not by group.
+ */
+
+const ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>`;
+
+export const zoomRegionTool = {
+  id: 'zoom-region',
+  icon: ICON,
+  tip: 'Zoom to region (Z)',
+  shortcut: 'z',
+  group: 'navigation',
+  overlayClass: 'mode-zoom',
+
+  // Zoom settings — override by cloning the tool if you want different values.
+  maxScale: 10,
+  padding: 0.05,       // leave 5% breathing room around the target box
+  minBoxSize: 0.005,   // anything smaller is treated as a click, not a drag
+
+  _drawing: null,
+
+  onPageMouseDown(ctx, e) {
+    e.preventDefault();
+    const rect = document.createElement('div');
+    rect.className = 'ann-draw-rect ann-draw-zoom';
+    ctx.overlay.appendChild(rect);
+    this._drawing = {
+      overlay: ctx.overlay, pageNumber: ctx.pageNumber,
+      sx: ctx.norm.x, sy: ctx.norm.y,
+      cx: ctx.norm.x, cy: ctx.norm.y,
+      el: rect,
+    };
+    this._updateRect();
+  },
+
+  onPageMouseMove(ctx) {
+    if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+    this._drawing.cx = ctx.norm.x;
+    this._drawing.cy = ctx.norm.y;
+    this._updateRect();
+  },
+
+  onPageMouseUp(ctx) {
+    if (!this._drawing || this._drawing.overlay !== ctx.overlay) return;
+    const d = this._drawing;
+    d.el.remove();
+
+    const x = Math.min(d.sx, d.cx);
+    const y = Math.min(d.sy, d.cy);
+    const w = Math.abs(d.cx - d.sx);
+    const h = Math.abs(d.cy - d.sy);
+    const page = d.pageNumber;
+    this._drawing = null;
+
+    if (w < this.minBoxSize || h < this.minBoxSize) return;
+
+    ctx.layer.zoomToRegion(page, x, y, w, h, {
+      padding: this.padding,
+      maxScale: this.maxScale,
+    });
+
+    // Zoom is a one-shot action. After it fires, go back to pointer so
+    // the next click doesn't start another zoom drag accidentally.
+    ctx.layer.setActiveTool('pointer');
+  },
+
+  deactivate() {
+    if (this._drawing) {
+      if (this._drawing.el) this._drawing.el.remove();
+      this._drawing = null;
+    }
+  },
+
+  _updateRect() {
+    const d = this._drawing;
+    if (!d || !d.el) return;
+    const x = Math.min(d.sx, d.cx);
+    const y = Math.min(d.sy, d.cy);
+    const w = Math.abs(d.cx - d.sx);
+    const h = Math.abs(d.cy - d.sy);
+    d.el.style.left = (x * 100) + '%';
+    d.el.style.top = (y * 100) + '%';
+    d.el.style.width = (w * 100) + '%';
+    d.el.style.height = (h * 100) + '%';
+  },
+};
+
+  </code></pre>
+    </div>
+
+    <script>
+      function copyCode(button) {
+        // Finds the code text inside the same wrapper
+        const code = button.parentElement.querySelector('code').innerText;
+
+        navigator.clipboard.writeText(code).then(() => {
+          button.textContent = 'Copied!';
+          button.classList.add('success');
+
+          // Reset button after 2 seconds
+          setTimeout(() => {
+            button.textContent = 'Copy';
+            button.classList.remove('success');
+          }, 2000);
+        });
+      }
+    </script>
+  </body>
+</html>
