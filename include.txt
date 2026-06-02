@@ -1,0 +1,983 @@
+[[ManageEmail.razor]]
+
+@page "/request/{SigningRequestId:int}/email"
+@using MudBlazor
+@using SignatureHub.Models
+@using SignatureHub.Services
+@using System.Web
+@inject SignerService SignerService
+@inject NavigationManager Nav
+
+@* 
+    TODO: inject a SigningRequestService once written to load Title/Instructions.
+    For now, SigningRequestId drives everything.
+*@
+
+<MudText Typo="Typo.h5" Class="mb-1">Notify Signers</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    Review the email below and open it in Outlook when ready.
+    The email will be addressed to all signers on this request.
+</MudText>
+
+@if (!_signers.Any())
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        No signers have been added to this request yet.
+        <MudLink Href="@($"/request/{SigningRequestId}/signers")">Add signers</MudLink>
+        before sending.
+    </MudAlert>
+}
+
+@* ── To field (read-only summary) ───────────────────────────────────────── *@
+<MudPaper Elevation="0" Class="pa-3 mb-4 border border-solid mud-border-lines-default"
+          Style="max-width:680px; border-radius:8px;">
+    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">TO</MudText>
+    <div class="d-flex flex-wrap gap-2">
+        @foreach (var signer in _signers)
+        {
+            <MudChip T="string"
+                     Size="Size.Small"
+                     Variant="Variant.Outlined"
+                     Icon="@Icons.Material.Filled.Person">
+                @signer.DisplayName
+            </MudChip>
+        }
+    </div>
+</MudPaper>
+
+@* ── Subject ─────────────────────────────────────────────────────────────── *@
+<MudTextField @bind-Value="_subject"
+              Label="Subject"
+              Variant="Variant.Outlined"
+              Style="max-width:680px;"
+              Class="mb-4" />
+
+@* ── Body ───────────────────────────────────────────────────────────────── *@
+<MudTextField @bind-Value="_body"
+              Label="Email body"
+              Variant="Variant.Outlined"
+              Lines="12"
+              Style="max-width:680px; font-family: monospace;"
+              Class="mb-2" />
+
+<MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-4">
+    Plain text only — formatting will appear as-is in Outlook.
+</MudText>
+
+@* ── Actions ─────────────────────────────────────────────────────────────── *@
+<div class="d-flex gap-3 flex-wrap mt-2">
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.OpenInNew"
+               Disabled="@(!_signers.Any())"
+               OnClick="OpenInOutlook">
+        Open in Outlook
+    </MudButton>
+
+    <MudButton Variant="Variant.Outlined"
+               StartIcon="@Icons.Material.Filled.Refresh"
+               OnClick="ResetTemplate">
+        Reset to Template
+    </MudButton>
+</div>
+
+@* ── Nav ─────────────────────────────────────────────────────────────────── *@
+<div class="d-flex gap-3 mt-6">
+    <MudButton Variant="Variant.Outlined"
+               StartIcon="@Icons.Material.Filled.ArrowBack"
+               OnClick="@(() => Nav.NavigateTo($"/request/{SigningRequestId}/signers"))">
+        Back to Signers
+    </MudButton>
+</div>
+
+@code {
+    [Parameter] public int SigningRequestId { get; set; }
+
+    private List<Signer> _signers = new();
+    private string _subject = string.Empty;
+    private string _body    = string.Empty;
+
+    // TODO: load from SigningRequest.Title and SigningRequest.Instructions
+    // once SigningRequestService is injected. For now these are placeholders.
+    private string _requestTitle        = "Signing Request";
+    private string _requestInstructions = string.Empty;
+
+    private string SigningUrl =>
+        Nav.ToAbsoluteUri($"/sign/{SigningRequestId}").ToString();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _signers = await SignerService.GetByRequestAsync(SigningRequestId);
+        ResetTemplate();
+    }
+
+    private void ResetTemplate()
+    {
+        _subject = $"Action Required: {_requestTitle}";
+        _body    = BuildTemplate();
+    }
+
+    private string BuildTemplate()
+    {
+        var instructions = string.IsNullOrWhiteSpace(_requestInstructions)
+            ? string.Empty
+            : $"\r\nAdditional instructions:\r\n{_requestInstructions}\r\n";
+
+        // Personalise the greeting if there is only one signer
+        var greeting = _signers.Count == 1
+            ? $"Hi {_signers[0].PreferredName},"
+            : "Hi,";
+
+        return $"""{greeting}
+
+You have been added to a signing request and your review is needed.
+
+Please click the link below to view the documents and apply your signature
+where required:
+
+    {SigningUrl}
+{instructions}
+If you have any questions, please reply to this email.
+
+Thank you,
+""";
+    }
+
+    private void OpenInOutlook()
+    {
+        if (!_signers.Any()) return;
+
+        var to      = string.Join(";", _signers.Select(s => s.Email));
+        var subject = HttpUtility.UrlEncode(_subject).Replace("+", "%20");
+        var body    = HttpUtility.UrlEncode(_body).Replace("+", "%20");
+
+        // mailto: has a practical body limit of ~2000 chars in most Outlook versions.
+        // The template is well under this — flag here if it grows.
+        var mailto = $"mailto:{to}?subject={subject}&body={body}";
+
+        Nav.NavigateTo(mailto);
+    }
+}
+
+
+[[ManageSigners.razor]]
+
+@page "/request/{SigningRequestId:int}/signers"
+@using MudBlazor
+@using SignatureHub.Models
+@using SignatureHub.Services
+@inject SignerService SignerService
+@inject EmployeeService EmployeeService
+@inject NavigationManager Nav
+
+<MudText Typo="Typo.h5" Class="mb-1">Signers</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    Search for employees to add as signers. Each person will be able to review
+    and stamp the documents in this request.
+</MudText>
+
+@* ── Search ──────────────────────────────────────────────────────────────── *@
+<MudAutocomplete T="EmployeeDto"
+                 Label="Search employees"
+                 Variant="Variant.Outlined"
+                 Dense="true"
+                 SearchFunc="SearchEmployeesAsync"
+                 ToStringFunc="@(e => e is null ? string.Empty : e.DisplayName)"
+                 ValueChanged="AddSignerAsync"
+                 Clearable="true"
+                 DebounceInterval="300"
+                 MinCharacters="2"
+                 AdornmentIcon="@Icons.Material.Filled.Search"
+                 AdornmentColor="Color.Primary"
+                 Style="max-width:480px;"
+                 Class="mb-4">
+    <ItemTemplate Context="employee">
+        <div class="d-flex align-center gap-3 py-1">
+            @if (!string.IsNullOrEmpty(employee.PhotoUrl))
+            {
+                <MudAvatar Image="@employee.PhotoUrl" Size="Size.Small" />
+            }
+            else
+            {
+                <MudAvatar Size="Size.Small" Color="Color.Primary">
+                    @employee.PreferredName.FirstOrDefault()
+                </MudAvatar>
+            }
+            <div>
+                <MudText Typo="Typo.body2">@employee.DisplayName</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@employee.DisplayOrg</MudText>
+            </div>
+        </div>
+    </ItemTemplate>
+</MudAutocomplete>
+
+@if (!string.IsNullOrEmpty(_errorMessage))
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4" ShowCloseIcon="true"
+              Close="@(() => _errorMessage = null)">
+        @_errorMessage
+    </MudAlert>
+}
+
+@* ── Signer list ─────────────────────────────────────────────────────────── *@
+@if (_signers.Any())
+{
+    <MudText Typo="Typo.subtitle2" Class="mb-2">
+        Added Signers (@_signers.Count)
+    </MudText>
+
+    <MudList T="Signer" Dense="true" Class="pa-0" Style="max-width:480px;">
+        @foreach (var signer in _signers)
+        {
+            <MudListItem T="Signer" Class="px-0">
+                <div class="d-flex align-center justify-space-between" style="width:100%;">
+                    <div class="d-flex align-center gap-3">
+                        @if (!string.IsNullOrEmpty(signer.PhotoUrl))
+                        {
+                            <MudAvatar Image="@signer.PhotoUrl" Size="Size.Medium" />
+                        }
+                        else
+                        {
+                            <MudAvatar Size="Size.Medium" Color="Color.Primary">
+                                @signer.PreferredName.FirstOrDefault()
+                            </MudAvatar>
+                        }
+                        <div>
+                            <MudText Typo="Typo.body2">@signer.DisplayName</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @signer.DisplayOrg · @signer.Email
+                            </MudText>
+                        </div>
+                    </div>
+                    <MudIconButton Icon="@Icons.Material.Filled.RemoveCircleOutline"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   OnClick="@(() => RemoveSignerAsync(signer))"
+                                   title="Remove signer" />
+                </div>
+            </MudListItem>
+            <MudDivider />
+        }
+    </MudList>
+}
+else
+{
+    <MudText Color="Color.Secondary" Typo="Typo.body2">
+        No signers added yet.
+    </MudText>
+}
+
+@* ── Nav ─────────────────────────────────────────────────────────────────── *@
+<div class="d-flex gap-3 mt-6">
+    <MudButton Variant="Variant.Outlined"
+               StartIcon="@Icons.Material.Filled.ArrowBack"
+               OnClick="@(() => Nav.NavigateTo($"/request/{SigningRequestId}/documents"))">
+        Back to Documents
+    </MudButton>
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               EndIcon="@Icons.Material.Filled.ArrowForward"
+               Disabled="@(!_signers.Any())"
+               OnClick="@(() => Nav.NavigateTo($"/request/{SigningRequestId}/email"))">
+        Continue to Email
+    </MudButton>
+</div>
+
+@code {
+    [Parameter] public int SigningRequestId { get; set; }
+
+    private List<Signer>  _signers      = new();
+    private string?       _errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _signers = await SignerService.GetByRequestAsync(SigningRequestId);
+    }
+
+    private async Task<IEnumerable<EmployeeDto>> SearchEmployeesAsync(
+        string searchText, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(searchText)) return [];
+        return await EmployeeService.SearchAsync(searchText, ct);
+    }
+
+    private async Task AddSignerAsync(EmployeeDto? employee)
+    {
+        if (employee is null) return;
+        _errorMessage = null;
+
+        var added = await SignerService.AddSignerAsync(SigningRequestId, employee);
+
+        if (added is null)
+        {
+            _errorMessage = $"{employee.DisplayName} is already added as a signer.";
+            return;
+        }
+
+        _signers.Add(added);
+        _signers = _signers.OrderBy(s => s.DisplayName).ToList();
+    }
+
+    private async Task RemoveSignerAsync(Signer signer)
+    {
+        await SignerService.RemoveSignerAsync(signer.Id);
+        _signers.Remove(signer);
+    }
+}
+
+
+[[Signer.cs]]
+
+namespace SignatureHub.Models;
+
+public class Signer
+{
+    public int Id { get; set; }
+    public int SigningRequestId { get; set; }
+
+    /// <summary>Employee personnel number — used as the unique identifier.</summary>
+    public string Perno { get; set; } = string.Empty;
+
+    public string Email { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string PreferredName { get; set; } = string.Empty;
+    public string DisplayOrg { get; set; } = string.Empty;
+
+    /// <summary>Snapshot of the photo URL at time of adding — may go stale, that's fine.</summary>
+    public string? PhotoUrl { get; set; }
+
+    public DateTime AddedAt { get; set; } = DateTime.UtcNow;
+
+    // ── EF navigation ───────────────────────────────────────────────────────
+    public SigningRequest? SigningRequest { get; set; }
+}
+
+
+[[SignerService.cs]]
+
+using Microsoft.EntityFrameworkCore;
+using SignatureHub.Data;
+using SignatureHub.Models;
+
+namespace SignatureHub.Services;
+
+/// <summary>
+/// Manages signers for a signing request.
+/// Register as Scoped in Program.cs.
+/// </summary>
+public class SignerService
+{
+    private readonly AppDbContext _db;
+
+    public SignerService(AppDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task<List<Signer>> GetByRequestAsync(int signingRequestId)
+    {
+        return await _db.Signers
+            .Where(s => s.SigningRequestId == signingRequestId)
+            .OrderBy(s => s.DisplayName)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Adds a signer. Returns null if the employee is already on this request.
+    /// </summary>
+    public async Task<Signer?> AddSignerAsync(int signingRequestId, EmployeeDto employee)
+    {
+        var alreadyExists = await _db.Signers.AnyAsync(s =>
+            s.SigningRequestId == signingRequestId &&
+            s.Perno == employee.Perno);
+
+        if (alreadyExists) return null;
+
+        var signer = new Signer
+        {
+            SigningRequestId = signingRequestId,
+            Perno            = employee.Perno,
+            Email            = employee.Email,
+            DisplayName      = employee.DisplayName,
+            PreferredName    = employee.PreferredName,
+            DisplayOrg       = employee.DisplayOrg,
+            PhotoUrl         = employee.PhotoUrl
+        };
+
+        _db.Signers.Add(signer);
+        await _db.SaveChangesAsync();
+        return signer;
+    }
+
+    public async Task RemoveSignerAsync(int signerId)
+    {
+        var signer = await _db.Signers.FindAsync(signerId);
+        if (signer is null) return;
+
+        _db.Signers.Remove(signer);
+        await _db.SaveChangesAsync();
+    }
+}
+
+
+[[DirectoryTreeUpload.razor]]
+
+@* 
+    DirectoryTreeUpload.razor
+    Drop this inside your stepper step for documents.
+    Requires: SigningRequestId parameter to be set before rendering.
+*@
+@using MudBlazor
+@using YourApp.Models
+@using YourApp.Helpers
+@using YourApp.Services
+@using Microsoft.AspNetCore.Components.Forms
+@inject IJSRuntime JS
+@inject DocumentService DocumentService
+
+<div class="d-flex align-center gap-3 flex-wrap mb-4">
+
+    @* ── Folder picker ───────────────────────────────────────────────────── *@
+    <InputFile @ref="_folderInput"
+               OnChange="HandleFolderSelected"
+               webkitdirectory
+               directory
+               multiple
+               style="display:none;"
+               id="folder-upload-input" />
+
+    <MudButton HtmlTag="label"
+               Variant="Variant.Filled"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.FolderOpen"
+               for="folder-upload-input"
+               Disabled="@_busy">
+        Add Folder
+    </MudButton>
+
+    @* ── Single file picker ──────────────────────────────────────────────── *@
+    <InputFile @ref="_fileInput"
+               OnChange="HandleFilesSelected"
+               multiple
+               style="display:none;"
+               id="file-upload-input" />
+
+    <MudButton HtmlTag="label"
+               Variant="Variant.Filled"
+               Color="Color.Secondary"
+               StartIcon="@Icons.Material.Filled.AttachFile"
+               for="file-upload-input"
+               Disabled="@_busy">
+        Add Files
+    </MudButton>
+
+    @* ── Remove selected ─────────────────────────────────────────────────── *@
+    <MudButton Variant="Variant.Outlined"
+               Color="Color.Error"
+               StartIcon="@Icons.Material.Filled.Delete"
+               Disabled="@(!CanRemove)"
+               OnClick="RemoveSelectedAsync">
+        Remove (@_selectedNodes.Count)
+    </MudButton>
+
+    @if (_busy)
+    {
+        <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="ml-2" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary">@_progressMessage</MudText>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(_errorMessage))
+{
+    <MudAlert Severity="Severity.Error" Class="mb-3" ShowCloseIcon="true"
+              Close="@(() => _errorMessage = null)">
+        @_errorMessage
+    </MudAlert>
+}
+
+@if (_rootNode.Children.Any())
+{
+    <div class="d-flex align-center gap-2 mb-2">
+        <MudText Typo="Typo.subtitle2">Documents</MudText>
+        @if (PendingCount > 0)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">
+                @PendingCount uploading…
+            </MudChip>
+        }
+        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">
+            @SyncedCount synced
+        </MudChip>
+    </div>
+
+    <MudPaper Elevation="0" Class="pa-2 border border-solid mud-border-lines-default" Style="max-width:640px;">
+        <MudTreeView T="SigningDocument"
+                     Hover="true"
+                     Dense="true"
+                     SelectionMode="SelectionMode.MultiSelection"
+                     @bind-SelectedValues="_selectedNodes"
+                     Class="tree-with-lines">
+            @foreach (var node in TopLevelNodes)
+            {
+                <FileTreeItem Node="@node" />
+            }
+        </MudTreeView>
+    </MudPaper>
+}
+else if (!_busy)
+{
+    <MudText Color="Color.Secondary" Typo="Typo.body2">
+        No documents added yet. Use the buttons above to add a folder or individual files.
+    </MudText>
+}
+
+<style>
+    .tree-row      { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+    .tree-row-meta { display: flex; gap: 16px; align-items: center; }
+</style>
+
+@code {
+    /// <summary>Must be set by the parent stepper before this component renders.</summary>
+    [Parameter, EditorRequired] public int SigningRequestId { get; set; }
+
+    private InputFile? _folderInput;
+    private InputFile? _fileInput;
+
+    private SigningDocument _rootNode = new() { Name = "Root", IsDirectory = true };
+    private IReadOnlyCollection<SigningDocument> _selectedNodes = new List<SigningDocument>();
+
+    private bool   _busy;
+    private string _progressMessage = string.Empty;
+    private string? _errorMessage;
+
+    private IEnumerable<SigningDocument> TopLevelNodes =>
+        _rootNode.Children is [{ IsDirectory: true } single]
+            ? single.Children
+            : _rootNode.Children;
+
+    private int  PendingCount => DocumentTreeHelper.FlattenFiles(_rootNode).Count(f => f.IsPending);
+    private int  SyncedCount  => DocumentTreeHelper.FlattenFiles(_rootNode).Count(f => f.IsSynced);
+    private bool CanRemove    => !_busy && _selectedNodes.Any(n => n.IsSynced || n.IsPending);
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadExistingAsync();
+    }
+
+    /// <summary>Seeds the tree from any documents already saved for this request.</summary>
+    private async Task LoadExistingAsync()
+    {
+        var synced = await DocumentService.GetByRequestAsync(SigningRequestId);
+        if (synced.Any())
+            _rootNode = DocumentTreeHelper.BuildTree([], synced);
+    }
+
+    // ── Folder upload ────────────────────────────────────────────────────────
+
+    private async Task HandleFolderSelected(InputFileChangeEventArgs e)
+    {
+        _errorMessage = null;
+        var files = e.GetMultipleFiles(maxAllowedFiles: 5000);
+
+        // Get relative paths from the DOM so we can preserve folder structure
+        string[] relativePaths = [];
+        if (_folderInput?.Element is not null)
+            relativePaths = await JS.InvokeAsync<string[]>("getRelativePaths", _folderInput.Element);
+
+        var incoming = files.Select((f, i) => (
+            relativePath: relativePaths.ElementAtOrDefault(i) ?? f.Name,
+            size: f.Size
+        ));
+
+        // Add to tree as Pending so the user sees them immediately
+        var existing = await DocumentService.GetByRequestAsync(SigningRequestId);
+        _rootNode = DocumentTreeHelper.BuildTree(incoming, existing);
+        _selectedNodes = new List<SigningDocument>();
+
+        // Upload automatically
+        await UploadPendingAsync(files.ToDictionary(
+            (f, i) => relativePaths.ElementAtOrDefault(i) ?? f.Name,
+            f => f));
+    }
+
+    // ── Single file upload ───────────────────────────────────────────────────
+
+    private async Task HandleFilesSelected(InputFileChangeEventArgs e)
+    {
+        _errorMessage = null;
+        var files = e.GetMultipleFiles(maxAllowedFiles: 200);
+
+        // Single files have no folder context — use filename as relative path
+        var incoming = files.Select(f => (relativePath: f.Name, size: f.Size));
+
+        var existing = await DocumentService.GetByRequestAsync(SigningRequestId);
+        _rootNode = DocumentTreeHelper.BuildTree(incoming, existing);
+        _selectedNodes = new List<SigningDocument>();
+
+        await UploadPendingAsync(files.ToDictionary(f => f.Name, f => f));
+    }
+
+    // ── Core upload ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Uploads all pending nodes one at a time, updating status live as each completes.
+    /// browserFileMap keys match the relativePath stored on the SigningDocument node.
+    /// </summary>
+    private async Task UploadPendingAsync(Dictionary<string, IBrowserFile> browserFileMap)
+    {
+        var pending = DocumentTreeHelper.FlattenFiles(_rootNode)
+            .Where(f => f.IsPending)
+            .ToList();
+
+        if (!pending.Any()) return;
+
+        _busy = true;
+
+        try
+        {
+            int done = 0;
+            foreach (var doc in pending)
+            {
+                if (!browserFileMap.TryGetValue(doc.RelativePath, out var browserFile))
+                    continue;
+
+                doc.Status = SyncStatus.Uploading;
+                _progressMessage = $"Uploading {doc.Name} ({done + 1} of {pending.Count})…";
+                StateHasChanged();
+
+                try
+                {
+                    var saved = await DocumentService.SaveDocumentAsync(
+                        SigningRequestId, doc.RelativePath, browserFile);
+
+                    // Update the in-memory node to reflect what was saved
+                    doc.Id         = saved.Id;
+                    doc.StoredPath = saved.StoredPath;
+                    doc.Status     = SyncStatus.Synced;
+                }
+                catch (Exception ex)
+                {
+                    doc.Status = SyncStatus.Error;
+                    _logger.LogError(ex, "Failed to upload {File}", doc.RelativePath);
+                    _errorMessage = $"Failed to upload {doc.Name}: {ex.Message}";
+                }
+
+                done++;
+                StateHasChanged();
+            }
+        }
+        finally
+        {
+            _busy = false;
+            _progressMessage = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    // ── Remove ───────────────────────────────────────────────────────────────
+
+    private async Task RemoveSelectedAsync()
+    {
+        if (!_selectedNodes.Any()) return;
+
+        // Delete synced documents from disk + DB
+        foreach (var node in _selectedNodes.Where(n => n.IsSynced && n.Id > 0))
+        {
+            await DocumentService.DeleteDocumentAsync(node.Id);
+        }
+
+        // Remove pending ones from the tree (no DB entry to clean up)
+        DocumentTreeHelper.RemovePendingNodes(_rootNode, _selectedNodes);
+
+        // Also remove the synced nodes from the in-memory tree
+        var syncedToRemove = _selectedNodes.Where(n => n.IsSynced).ToHashSet();
+        RemoveSyncedNodes(_rootNode, syncedToRemove);
+
+        _selectedNodes = new List<SigningDocument>();
+        StateHasChanged();
+    }
+
+    private static void RemoveSyncedNodes(SigningDocument parent, HashSet<SigningDocument> toRemove)
+    {
+        parent.Children.RemoveAll(toRemove.Contains);
+        foreach (var child in parent.Children)
+            RemoveSyncedNodes(child, toRemove);
+    }
+}
+
+
+[[DocumentService.cs]]
+
+using Microsoft.AspNetCore.Components.Forms;
+using YourApp.Models;
+
+namespace YourApp.Services;
+
+/// <summary>
+/// Handles file storage and SigningDocument persistence.
+/// Register as Scoped in Program.cs.
+/// </summary>
+public class DocumentService
+{
+    private readonly AppDbContext _db;
+    private readonly IConfiguration _config;
+    private readonly ILogger<DocumentService> _logger;
+
+    /// <summary>
+    /// Base folder for all signing request files.
+    /// Set "StorageRoot" in appsettings.json, e.g. "C:\\SigningStorage"
+    /// </summary>
+    private string StorageRoot => _config["StorageRoot"]
+        ?? throw new InvalidOperationException("StorageRoot is not configured in appsettings.json");
+
+    public DocumentService(AppDbContext db, IConfiguration config, ILogger<DocumentService> logger)
+    {
+        _db = db;
+        _config = config;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Loads all synced documents for a request. Used to seed the tree on page load.
+    /// </summary>
+    public async Task<List<SigningDocument>> GetByRequestAsync(int signingRequestId)
+    {
+        return await _db.SigningDocuments
+            .Where(d => d.SigningRequestId == signingRequestId && !d.IsDirectory)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Writes a single browser file to disk and saves a SigningDocument record to the DB.
+    /// Returns the saved entity with its new Id and StoredPath set.
+    /// </summary>
+    public async Task<SigningDocument> SaveDocumentAsync(
+        int signingRequestId,
+        string relativePath,
+        IBrowserFile browserFile,
+        CancellationToken ct = default)
+    {
+        var requestFolder = Path.Combine(StorageRoot, signingRequestId.ToString(), "original");
+
+        // Preserve subfolder structure within the request folder
+        var relativeDir  = Path.GetDirectoryName(relativePath) ?? string.Empty;
+        var targetFolder = Path.Combine(requestFolder, relativeDir);
+        Directory.CreateDirectory(targetFolder);
+
+        var fileName   = Path.GetFileName(relativePath);
+        var targetPath = Path.Combine(targetFolder, fileName);
+
+        // Stream directly to disk — avoids loading the whole file into memory
+        await using var stream = browserFile.OpenReadStream(maxAllowedSize: 100 * 1024 * 1024, ct);
+        await using var fs     = File.Create(targetPath);
+        await stream.CopyToAsync(fs, ct);
+
+        var doc = new SigningDocument
+        {
+            SigningRequestId = signingRequestId,
+            Name             = fileName,
+            RelativePath     = relativePath,
+            StoredPath       = targetPath,
+            Size             = browserFile.Size,
+            IsDirectory      = false,
+            Status           = SyncStatus.Synced
+        };
+
+        _db.SigningDocuments.Add(doc);
+        await _db.SaveChangesAsync(ct);
+
+        return doc;
+    }
+
+    /// <summary>
+    /// Deletes a pending/error document from the tree.
+    /// Synced documents cannot be deleted here — handle that separately with a confirmation.
+    /// </summary>
+    public async Task DeleteDocumentAsync(int documentId)
+    {
+        var doc = await _db.SigningDocuments.FindAsync(documentId);
+        if (doc is null) return;
+
+        if (File.Exists(doc.StoredPath))
+            File.Delete(doc.StoredPath);
+
+        _db.SigningDocuments.Remove(doc);
+        await _db.SaveChangesAsync();
+    }
+}
+
+
+[[DocumentTreeHelper.cs]]
+
+using YourApp.Models;
+
+namespace YourApp.Helpers;
+
+public static class DocumentTreeHelper
+{
+    /// <summary>
+    /// Builds a tree of SigningDocument nodes from a flat list of file metadata.
+    /// Pending files (from the browser) are merged on top of already-synced nodes
+    /// that were loaded from the database.
+    /// </summary>
+    public static SigningDocument BuildTree(
+        IEnumerable<(string relativePath, long size)> incomingFiles,
+        IEnumerable<SigningDocument>? existingSynced = null)
+    {
+        var root = new SigningDocument { Name = "Root", IsDirectory = true };
+
+        // Seed the tree with anything already synced from the DB
+        if (existingSynced is not null)
+        {
+            foreach (var doc in existingSynced)
+                InsertNode(root, doc.RelativePath, doc.Size, doc.Status, doc.Id);
+        }
+
+        // Layer in the newly selected local files as Pending
+        foreach (var (relativePath, size) in incomingFiles)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath)) continue;
+            InsertNode(root, relativePath, size, SyncStatus.Pending, id: 0);
+        }
+
+        SortTree(root);
+        return root;
+    }
+
+    private static void InsertNode(
+        SigningDocument root, string relativePath, long? size, SyncStatus status, int id)
+    {
+        var parts = relativePath.Split('/');
+
+        // Skip the top-level folder name that the browser prepends
+        var segments = parts.Length > 1 ? parts.Skip(1).ToArray() : parts;
+
+        var current = root;
+        for (int i = 0; i < segments.Length; i++)
+        {
+            var segment = segments[i];
+            var isFile = i == segments.Length - 1;
+
+            var existing = current.Children
+                .FirstOrDefault(n => n.Name == segment && n.IsDirectory == !isFile);
+
+            if (existing is null)
+            {
+                var node = new SigningDocument
+                {
+                    Id = isFile ? id : 0,
+                    Name = segment,
+                    IsDirectory = !isFile,
+                    RelativePath = string.Join("/", segments.Take(i + 1)),
+                    Size = isFile ? size : null,
+                    Status = isFile ? status : SyncStatus.Synced // directories inherit synced if from DB
+                };
+                current.Children.Add(node);
+                current = node;
+            }
+            else
+            {
+                current = existing;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes the given nodes from the tree. Only removes Pending nodes —
+    /// synced nodes cannot be deleted from the UI (handle that via a separate confirmation flow).
+    /// </summary>
+    public static void RemovePendingNodes(SigningDocument parent, IReadOnlyCollection<SigningDocument> toRemove)
+    {
+        parent.Children.RemoveAll(c => toRemove.Contains(c) && c.IsPending);
+
+        foreach (var child in parent.Children)
+            RemovePendingNodes(child, toRemove);
+
+        // Prune empty pending directories
+        parent.Children.RemoveAll(c => c.IsDirectory && !c.Children.Any() && c.IsPending);
+    }
+
+    /// <summary>Returns a flat list of all file (non-directory) nodes under a root.</summary>
+    public static IEnumerable<SigningDocument> FlattenFiles(SigningDocument root)
+    {
+        foreach (var child in root.Children)
+        {
+            if (!child.IsDirectory) yield return child;
+            foreach (var grandchild in FlattenFiles(child))
+                yield return grandchild;
+        }
+    }
+
+    private static void SortTree(SigningDocument node)
+    {
+        if (!node.Children.Any()) return;
+
+        node.Children = node.Children
+            .OrderByDescending(n => n.IsDirectory)
+            .ThenBy(n => n.Name)
+            .ToList();
+
+        foreach (var child in node.Children)
+            SortTree(child);
+    }
+}
+
+[[FileTreeItem.razor]]
+@* FileTreeItem.razor — recursive component for one node in the document tree *@
+@using YourApp.Models
+@using MudBlazor
+
+@if (Node.IsDirectory)
+{
+    <MudTreeViewItem T="SigningDocument"
+                     Value="@Node"
+                     Icon="@Icons.Material.Filled.Folder"
+                     IconColor="Color.Warning">
+        <BodyContent>
+            <div class="tree-row">
+                <MudText Typo="Typo.body2">@Node.Name</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mr-4">
+                    @Node.Children.Count items
+                </MudText>
+            </div>
+        </BodyContent>
+        <ChildContent>
+            @foreach (var child in Node.Children)
+            {
+                <FileTreeItem Node="@child" />
+            }
+        </ChildContent>
+    </MudTreeViewItem>
+}
+else
+{
+    <MudTreeViewItem T="SigningDocument"
+                     Value="@Node"
+                     Icon="@(Node.IsSynced
+                               ? Icons.Material.Filled.CloudDone
+                               : Icons.Material.Filled.InsertDriveFile)"
+                     IconColor="@(Node.IsSynced ? Color.Success : Color.Default)">
+        <BodyContent>
+            <div class="tree-row">
+                <MudText Typo="Typo.body2">@Node.Name</MudText>
+                <div class="tree-row-meta mr-4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @Node.FormattedSize
+                    </MudText>
+                    <MudChip T="string"
+                             Color="@Node.StatusColor"
+                             Size="Size.Small"
+                             Variant="Variant.Text">
+                        @Node.StatusLabel
+                    </MudChip>
+                </div>
+            </div>
+        </BodyContent>
+    </MudTreeViewItem>
+}
+
+@code {
+    [Parameter, EditorRequired] public SigningDocument Node { get; set; } = default!;
+}
