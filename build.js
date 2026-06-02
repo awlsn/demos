@@ -3,7 +3,7 @@ const fs = require("fs");
 fs.mkdirSync("public", { recursive: true });
 
 // Copy all html files into public/
-const files = fs.readdirSync(".").filter(f => f.endsWith(".html"));
+const files = fs.readdirSync(".").filter(f => f.endsWith(".html") || f,endsWidth(".txt"));
 files.forEach(f => fs.copyFileSync(f, `public/${f}`));
 
 // Generate index
